@@ -1,6 +1,6 @@
 [package]
 name = "tarafold-expr"
-description = "Expression trees."
+description = "Expression trees for Tarafold: evaluation, derivatives, printing and parsing."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,12 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+serde.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tarafold-core.workspace = true
 
 [lints]
 workspace = true

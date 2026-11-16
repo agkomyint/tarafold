@@ -166,3 +166,6 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
   - Done when: downloaded binaries run `tarafold bench --suite smoke` on each OS with no other runtime installed, the UI is served from the embedded assets with networking disabled, and a test asserts the binary opens no outbound connections. _R1.1–R1.3, R14.6, R15.2_
 - [ ] 9.6 Full bench meets all v0.1 acceptance thresholds in design §6.2; update CHANGELOG; tag `v0.1.0`.
   - Done when: thresholds met and release published. _Success criterion, R15.4_
+- [ ] 9.7 Engine interface and `--engine` flag (classical only), engine recorded in report and `run.toml`, `bench --compare` running each available engine side by side.
+  - Done when: `--engine quantum` exits with code 2 and a clear message; `bench --compare classical` produces the comparison table. _R20.1–R20.4, R20.6_
+  - Future (v0.5, not v0.1): QUBO formulations, local simulator backend, opt-in remote-hardware feature. _R20.5_

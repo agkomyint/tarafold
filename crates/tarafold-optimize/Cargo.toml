@@ -1,6 +1,6 @@
 [package]
 name = "tarafold-optimize"
-description = "Optimization."
+description = "Target-seeking optimization over discovered equations for Tarafold."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,14 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+tarafold-core.workspace = true
+tarafold-expr.workspace = true
+tarafold-validate.workspace = true
+serde.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+tarafold-expr.workspace = true
 
 [lints]
 workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "tarafold-engine"
-description = "Pipeline."
+description = "Pipeline orchestration for Tarafold: runs every stage and assembles the report."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,17 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+tarafold-core.workspace = true
+tarafold-expr.workspace = true
+tarafold-discover.workspace = true
+tarafold-validate.workspace = true
+tarafold-optimize.workspace = true
+tarafold-report.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tarafold-synth.workspace = true
+tarafold-io.workspace = true
 
 [lints]
 workspace = true

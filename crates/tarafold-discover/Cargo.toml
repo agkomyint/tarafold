@@ -1,6 +1,6 @@
 [package]
 name = "tarafold-discover"
-description = "Equation discovery."
+description = "Equation discovery for Tarafold: sparse basis regression and symbolic search."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,13 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+tarafold-core.workspace = true
+tarafold-expr.workspace = true
+serde.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+tarafold-synth.workspace = true
 
 [lints]
 workspace = true

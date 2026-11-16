@@ -685,3 +685,36 @@ expected hypervolume improvement, Parquet input, Python bindings, GPU, hosted se
   (PyO3 + maturin, `pip install tarafold`).
 - v0.3: Causal assistance with explicit assumptions (DAG input, constraint-based discovery as hypotheses); suggestions designed specifically to test whether an intervention works (randomized designs); Gaussian-process surrogates as an alternative uncertainty model for suggestions.
 - v0.4: Dynamical systems (SINDy on time derivatives); integrations with lab automation for fully closed loops.
+- v0.5 (experimental): quantum and hybrid engines behind `--engine` (R20); see §14.
+
+## 14. Quantum and hybrid engines (future, R20)
+
+v0.1 defines the engine interface and the `--engine` flag; only `classical` ships.
+
+**Engine interface.** `trait Engine { fn discover(&self, ctx, data) -> DiscoverOutput;
+fn optimize(&self, ctx, problem) -> OptimizeOutput; fn capabilities(&self) -> Caps; }`. The
+classical implementation wraps the stages in §5. Output types are shared, so Stage 6
+validation, grading, evidence levels, and the report are identical for all engines.
+
+**Where quantum methods could plausibly fit** (each is a combinatorial sub-problem that can be
+written as a QUBO, i.e. minimizing `xᵀQx` over binary `x`):
+
+| Sub-problem | QUBO form | Engine |
+|---|---|---|
+| Sparse basis selection (5a): pick ≤ k of 400 basis terms | binary inclusion variables; Q from the Gram matrix and `Xᵀy`, plus a cardinality penalty | quantum annealing or QAOA |
+| Integer / step controllables in optimization (R8.9) | binary encoding of grid levels; Q from a local quadratic model of `J` | quantum annealing or QAOA |
+| Diverse batch selection for suggestions (R19.4) | maximize acquisition minus pairwise similarity | quantum annealing or QAOA |
+
+- **`quantum`:** solves those QUBOs on a quantum backend (a local state-vector simulator by
+  default, remote hardware only with an opt-in feature and provider flag); continuous parts
+  (constant fitting, validation) stay classical, because they cannot run otherwise.
+- **`hybrid`:** classical GP search and constant fitting, with QUBO sub-problems sent to the
+  quantum backend, and a classical solve of the same QUBO kept as a fallback and reference.
+- **Reference solver:** every QUBO is also solved classically (simulated annealing / exact for
+  small sizes), so `bench --compare` measures quantum against the same formulation, not against
+  a different algorithm.
+
+**Expectations.** At v0.1 problem sizes (≤ 400 binary variables), classical solvers are
+expected to match or beat current quantum hardware. The point of R20 is to measure that
+honestly as hardware improves; a quantum engine becomes a recommended default only if the
+comparison bench shows better metrics at equal or lower cost.

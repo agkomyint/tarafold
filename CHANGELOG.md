@@ -15,6 +15,8 @@ All notable changes to this project are documented here. The format follows
 - Multi-goal optimization: hard and soft goals, up to 10 objectives (NSGA-II/III), chained
   targets, joint goal probability, conflict reporting.
 - Next-experiment suggestions (`--suggest`, `tarafold suggest`) with a closed-loop benchmark.
+- Pluggable engines (`--engine classical|quantum|hybrid`, `bench --compare`): classical in
+  v0.1; quantum and hybrid planned as experimental (v0.5).
 
 ### Added
 

@@ -259,3 +259,23 @@ that each round of new data most reduces uncertainty or most likely reaches my g
 7. THE system SHALL write `suggestions.csv` with the same columns as the input, suggested values filled in, and target columns empty, so results can be filled in and appended to the dataset for the next run.
 8. THE report SHALL state that suggestions are proposals of where to measure next, not predictions that the goal will be reached.
 9. Suggestions SHALL be deterministic for the same input, config, and seed.
+
+### R20 — Pluggable discovery engines (classical now; quantum and hybrid later)
+
+**User story:** As a researcher, I want to choose the computation backend for discovery and
+compare backends on the same benchmark, so that quantum and hybrid methods can be adopted
+when, and only if, they measurably help.
+
+```
+tarafold discover data.csv --engine classical     # default; the only engine in v0.1
+tarafold discover data.csv --engine quantum       # future, experimental
+tarafold discover data.csv --engine hybrid        # future
+tarafold bench --compare classical,quantum,hybrid
+```
+
+1. `run`, `discover`, `optimize`, and `suggest` SHALL accept `--engine <classical|quantum|hybrid>` (default `classical`), and the chosen engine SHALL be recorded in `report.json` and `run.toml`.
+2. IN v0.1, only `classical` SHALL be available. WHEN `quantum` or `hybrid` is requested, THE system SHALL exit with code 2 and a message stating the engine is not available in this build.
+3. Engines SHALL implement one engine interface so that every engine produces the same candidate, front, and report types and passes the same validation stage; no engine SHALL bypass validation, reliability grading, or evidence levels.
+4. `tarafold bench --compare <engines>` SHALL run the same suite, seeds, and budgets on each listed engine and report every bench metric side by side, plus wall time, and for quantum engines the shots, qubits, and backend used.
+5. A quantum engine that needs remote hardware SHALL be a separate opt-in build feature and SHALL require an explicit flag naming the provider; the default binary SHALL keep making no network calls (R1.3).
+6. Reports from non-classical engines SHALL state the backend, whether it was a simulator or hardware, and that results are experimental.

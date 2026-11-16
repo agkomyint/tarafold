@@ -1,6 +1,6 @@
 [package]
 name = "tarafold-synth"
-description = "Synthetic data."
+description = "Synthetic datasets from known equations, for measuring Tarafold's discovery."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,11 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+tarafold-core.workspace = true
+tarafold-expr.workspace = true
+tarafold-io.workspace = true
+serde.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "tarafold-report"
-description = "Report."
+description = "Report schema, JSON/CSV output and user-facing wording for Tarafold."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,14 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+tarafold-core.workspace = true
+tarafold-expr.workspace = true
+tarafold-io.workspace = true
+tarafold-discover.workspace = true
+tarafold-validate.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
 
 [lints]
 workspace = true
