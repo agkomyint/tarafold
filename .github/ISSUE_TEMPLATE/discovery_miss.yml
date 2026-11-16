@@ -1,0 +1,28 @@
+name: Discovery miss
+description: Tarafold did not recover an equation you know generated the data.
+labels: [discovery, benchmark-candidate]
+body:
+  - type: textarea
+    id: truth
+    attributes:
+      label: True equation
+      description: Infix form, e.g. `2.5 * x1^0.7 * x2^0.3`
+    validations: { required: true }
+  - type: textarea
+    id: sampling
+    attributes:
+      label: Sampling
+      description: Variable ranges/distributions, row count, noise level, distractor columns.
+    validations: { required: true }
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and seed
+      render: shell
+    validations: { required: true }
+  - type: textarea
+    id: result
+    attributes:
+      label: What Tarafold returned
+      description: Selected equation, test R², grade (from the summary or report.json).
+    validations: { required: true }

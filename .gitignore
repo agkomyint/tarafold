@@ -1,0 +1,31 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Fuzzing
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+
+# Web
+/web/node_modules/
+/web/dist/
+/web/dist-single/
+/web/.vite/
+/web/test-results/
+/web/playwright-report/
+
+# Tarafold outputs
+/tarafold-out/
+/bench/results/
+*.tarafold-run/
+
+# Python (dev-only PySR reference)
+/bench/reference/.venv/
+__pycache__/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

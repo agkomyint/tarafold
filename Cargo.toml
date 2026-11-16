@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+repository = "https://github.com/tarafold/tarafold"
+authors = ["Tarafold contributors"]
+
+[workspace.dependencies]
+tarafold-core = { path = "crates/tarafold-core", version = "0.1.0-dev" }
+tarafold-io = { path = "crates/tarafold-io", version = "0.1.0-dev" }
+tarafold-expr = { path = "crates/tarafold-expr", version = "0.1.0-dev" }
+tarafold-profile = { path = "crates/tarafold-profile", version = "0.1.0-dev" }
+tarafold-relate = { path = "crates/tarafold-relate", version = "0.1.0-dev" }
+tarafold-discover = { path = "crates/tarafold-discover", version = "0.1.0-dev" }
+tarafold-validate = { path = "crates/tarafold-validate", version = "0.1.0-dev" }
+tarafold-optimize = { path = "crates/tarafold-optimize", version = "0.1.0-dev" }
+tarafold-synth = { path = "crates/tarafold-synth", version = "0.1.0-dev" }
+tarafold-bench = { path = "crates/tarafold-bench", version = "0.1.0-dev" }
+tarafold-report = { path = "crates/tarafold-report", version = "0.1.0-dev" }
+tarafold-engine = { path = "crates/tarafold-engine", version = "0.1.0-dev" }
+tarafold-server = { path = "crates/tarafold-server", version = "0.1.0-dev" }
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.2.1"
+clap = { version = "4.6.7", features = ["derive"] }
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+rand_chacha = "0.10.0"
+rand_core = "0.10.1"
+csv = "1.4.0"
+sha2 = "0.11.1"
+schemars = "1.2.3"
+assert_cmd = "2.2.2"
+tempfile = "3.27.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 2
