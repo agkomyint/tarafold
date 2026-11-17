@@ -44,11 +44,12 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
 
 ## Phase 2 — Measure it
 
-- [ ] 2.1 `tarafold-bench`: runner over registry subsets, all metrics in design §6.2, per-dataset and aggregate JSON + Markdown table.
+- [x] 2.1 `tarafold-bench`: runner over registry subsets, all metrics in design §6.2, per-dataset and aggregate JSON + Markdown table.
   - Done when: `tarafold bench --suite smoke` runs and prints the table. _R11.3_
 - [ ] 2.2 Symbolic equivalence (rounded-constant comparison + numeric equivalence); used by bench and later by stability.
   - Done when: tests show `x*(y+1)` ≡ `x*y + x` and `2.5x^0.7` ≢ `2.5x^0.8`. _R11.3_
-- [ ] 2.3 Commit `bench/baseline.json`; `--baseline` comparison with thresholds; smoke bench in CI.
+  - Status: numeric equivalence (exact) and refit-constants structure check are implemented in the bench; e-graph equivalence still to do.
+- [x] 2.3 Commit `bench/baseline.json`; `--baseline` comparison with thresholds; smoke bench in CI.
   - Done when: an intentional regression fails CI. _R11.4, R11.5_
 - [ ] 2.4 Expand registry to ≥ 25 equations across T1–T12 with noise, distractor, and collinear variants.
   - Done when: `tarafold synth --list` shows ≥ 25 entries with tiers. _R11.2_

@@ -283,6 +283,19 @@ pub fn generate(
     distractors: usize,
     seed: u64,
 ) -> Result<Generated, SynthError> {
+    generate_widened(entry, rows, noise, distractors, seed, 0.0)
+}
+
+/// Like [`generate`], with every uniform input range widened by `widen × (hi − lo)` on each
+/// side (lower bounds of non-negative ranges are clamped at 0). Used to test extrapolation.
+pub fn generate_widened(
+    entry: &Entry,
+    rows: usize,
+    noise: f64,
+    distractors: usize,
+    seed: u64,
+    widen: f64,
+) -> Result<Generated, SynthError> {
     if rows == 0 || rows > 10_000_000 {
         return Err(SynthError::Params(
             "rows must be between 1 and 10,000,000".into(),
@@ -305,7 +318,18 @@ pub fn generate(
 
     for spec in &entry.columns {
         let values = match spec {
-            Uniform(_, lo, hi) => (0..rows).map(|_| rng.range(*lo, *hi)).collect(),
+            Uniform(_, lo, hi) => {
+                let span = hi - lo;
+                let wlo = if *lo > 0.0 {
+                    (lo - widen * span).max(lo / 2.0)
+                } else if *lo == 0.0 {
+                    0.0
+                } else {
+                    lo - widen * span
+                };
+                let whi = hi + widen * span;
+                (0..rows).map(|_| rng.range(wlo, whi)).collect()
+            }
             Derived(_, src) => {
                 let e = parse(src, &names).map_err(|e| bad(e.to_string()))?;
                 let refs: Vec<&[f64]> = cols.iter().map(Vec::as_slice).collect();

@@ -576,6 +576,17 @@ dependencies = [
 [[package]]
 name = "tarafold-bench"
 version = "0.1.0-dev"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tarafold-core",
+ "tarafold-discover",
+ "tarafold-engine",
+ "tarafold-expr",
+ "tarafold-io",
+ "tarafold-synth",
+ "tarafold-validate",
+]
 
 [[package]]
 name = "tarafold-cli"
@@ -585,6 +596,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "serde_json",
+ "tarafold-bench",
  "tarafold-core",
  "tarafold-engine",
  "tarafold-io",

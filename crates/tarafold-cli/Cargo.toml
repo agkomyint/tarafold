@@ -19,6 +19,7 @@ tarafold-io.workspace = true
 tarafold-synth.workspace = true
 tarafold-report.workspace = true
 tarafold-engine.workspace = true
+tarafold-bench.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true

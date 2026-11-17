@@ -37,6 +37,8 @@ enum Command {
     Run(Box<RunArgs>),
     /// Generate a synthetic dataset from a known equation.
     Synth(SynthArgs),
+    /// Run the known-equation benchmark and score discovery against the truth.
+    Bench(BenchArgs),
     /// Print the JSON Schema of report.json.
     Schema,
 }
@@ -122,6 +124,28 @@ struct RunArgs {
     /// Output format on stdout.
     #[arg(long, value_enum, default_value = "human")]
     format: Format,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum SuiteArg {
+    Smoke,
+    Full,
+}
+
+#[derive(Args)]
+struct BenchArgs {
+    /// Which cases to run.
+    #[arg(long, value_enum, default_value = "smoke")]
+    suite: SuiteArg,
+    /// Baseline file to compare against; exits 1 on regression.
+    #[arg(long)]
+    baseline: Option<PathBuf>,
+    /// Write this run's aggregate into the baseline file (keeps other suites).
+    #[arg(long)]
+    write_baseline: Option<PathBuf>,
+    /// Output directory for bench.json and bench.md.
+    #[arg(long, default_value = "bench-out")]
+    out: PathBuf,
 }
 
 #[derive(Args)]
@@ -334,6 +358,80 @@ fn cmd_run(a: &RunArgs) -> Result<u8, Failure> {
     })
 }
 
+fn cmd_bench(a: &BenchArgs) -> Result<u8, Failure> {
+    let suite = match a.suite {
+        SuiteArg::Smoke => tarafold_bench::Suite::Smoke,
+        SuiteArg::Full => tarafold_bench::Suite::Full,
+    };
+    let tty = std::io::stderr().is_terminal();
+    let report = tarafold_bench::run(suite, |i, n, r| {
+        if tty {
+            eprintln!(
+                "[{i}/{n}] {} rows={} noise={} -> {}",
+                r.case.dataset,
+                r.case.rows,
+                r.case.noise,
+                if r.structure { "structure ok" } else { "miss" }
+            );
+        }
+    });
+    fs::create_dir_all(&a.out).with_context(|| format!("creating {}", a.out.display()))?;
+    let json = serde_json::to_string_pretty(&report).map_err(|e| anyhow!(e.to_string()))?;
+    write(&a.out, "bench.json", &json)?;
+    let md = tarafold_bench::markdown(&report);
+    write(&a.out, "bench.md", &md)?;
+    print!("{md}");
+
+    let read_baselines = |p: &Path| -> Result<serde_json::Map<String, serde_json::Value>, Failure> {
+        if !p.exists() {
+            return Ok(serde_json::Map::new());
+        }
+        let text = fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
+        serde_json::from_str(&text)
+            .map_err(|e| usage(format!("invalid baseline {}: {e}", p.display())))
+    };
+    let mut code = 0;
+    if let Some(p) = &a.baseline {
+        let all = read_baselines(p)?;
+        match all.get(suite.key()) {
+            None => eprintln!(
+                "note: {} has no `{}` baseline; skipping comparison",
+                p.display(),
+                suite.key()
+            ),
+            Some(v) => {
+                let base: tarafold_bench::Aggregate = serde_json::from_value(v.clone())
+                    .map_err(|e| usage(format!("invalid baseline entry: {e}")))?;
+                let regressions = tarafold_bench::compare(&report.aggregate, &base);
+                if regressions.is_empty() {
+                    println!("\nNo regressions against {}.", p.display());
+                } else {
+                    println!("\nRegressions against {}:", p.display());
+                    for r in &regressions {
+                        println!(
+                            "  {}: baseline {:.4}, now {:.4} (allowed change {:.2})",
+                            r.metric, r.baseline, r.current, r.allowed
+                        );
+                    }
+                    code = 1;
+                }
+            }
+        }
+    }
+    if let Some(p) = &a.write_baseline {
+        let mut all = read_baselines(p)?;
+        let v = serde_json::to_value(&report.aggregate).map_err(|e| anyhow!(e.to_string()))?;
+        all.insert(suite.key().into(), v);
+        if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+            fs::create_dir_all(dir)?;
+        }
+        let text = serde_json::to_string_pretty(&all).map_err(|e| anyhow!(e.to_string()))?;
+        fs::write(p, text + "\n").with_context(|| format!("writing {}", p.display()))?;
+        println!("Wrote `{}` baseline to {}", suite.key(), p.display());
+    }
+    Ok(code)
+}
+
 fn cmd_synth(a: &SynthArgs) -> Result<u8, Failure> {
     if a.list {
         for e in tarafold_synth::registry() {
@@ -375,6 +473,7 @@ fn main() -> ExitCode {
     let result = match &cli.command {
         Command::Run(a) => cmd_run(a),
         Command::Synth(a) => cmd_synth(a),
+        Command::Bench(a) => cmd_bench(a),
         Command::Schema => tarafold_report::schema_json()
             .map_err(Failure::from)
             .map(|s| {

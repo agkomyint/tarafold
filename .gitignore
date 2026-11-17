@@ -18,6 +18,8 @@
 # Tarafold outputs
 /tarafold-out/
 /bench/results/
+/bench/results-full/
+/bench-out/
 *.tarafold-run/
 
 # Python (dev-only PySR reference)

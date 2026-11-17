@@ -1,0 +1,32 @@
+{
+  "full": {
+    "accuracy_rate": 0.8787878787878788,
+    "cases": 66,
+    "coverage_90_noisy": 0.8826136363636364,
+    "errors": 0,
+    "exact_rate": 0.3787878787878788,
+    "inverse_success": 0.9908536585365854,
+    "median_complexity_ratio": 1.1666666666666667,
+    "median_extrapolation_r2": 0.9999974144206537,
+    "median_oracle_gap": 1.437094402922945e-7,
+    "seconds": 77.6830766,
+    "structure_rate": 0.7878787878787878,
+    "var_precision": 1.0,
+    "var_recall": 1.0
+  },
+  "smoke": {
+    "accuracy_rate": 1.0,
+    "cases": 16,
+    "coverage_90_noisy": 0.89625,
+    "errors": 0,
+    "exact_rate": 0.5625,
+    "inverse_success": 1.0,
+    "median_complexity_ratio": 1.0,
+    "median_extrapolation_r2": 0.9999995624181126,
+    "median_oracle_gap": 0.0,
+    "seconds": 8.524828000000001,
+    "structure_rate": 1.0,
+    "var_precision": 1.0,
+    "var_recall": 1.0
+  }
+}
