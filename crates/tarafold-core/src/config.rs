@@ -78,6 +78,8 @@ pub struct DiscoverConfig {
     pub max_front: usize,
     /// Override the selected equation by front id.
     pub select: Option<usize>,
+    /// Genetic-programming search settings.
+    pub gp: GpConfig,
 }
 
 impl Default for DiscoverConfig {
@@ -89,6 +91,41 @@ impl Default for DiscoverConfig {
             max_terms: 12,
             max_front: 20,
             select: None,
+            gp: GpConfig::default(),
+        }
+    }
+}
+
+/// Genetic-programming symbolic regression settings (design §5b).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct GpConfig {
+    /// Run the GP stage.
+    pub enabled: bool,
+    /// Independent populations, evolved in parallel and joined by migration.
+    pub islands: usize,
+    /// Expressions per island.
+    pub population: usize,
+    /// Total expression evaluations across islands. Bounds the search deterministically.
+    pub max_evals: usize,
+    /// Training rows used for fitness (subsampled beyond this).
+    pub rows: usize,
+    /// Largest complexity allowed.
+    pub max_complexity: usize,
+    /// Evolution steps per island between migrations.
+    pub epoch_steps: usize,
+}
+
+impl Default for GpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            islands: 8,
+            population: 64,
+            max_evals: 240_000,
+            rows: 800,
+            max_complexity: 30,
+            epoch_steps: 250,
         }
     }
 }

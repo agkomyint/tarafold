@@ -149,6 +149,82 @@ impl Expr {
         &self.nodes
     }
 
+    /// Build from postfix nodes; `None` unless the nodes form exactly one well-formed expression.
+    pub fn from_nodes(nodes: Vec<Node>) -> Option<Self> {
+        let mut depth: usize = 0;
+        for n in &nodes {
+            match n {
+                Node::Const(c) if !c.is_finite() => return None,
+                Node::Const(_) | Node::Var(_) => depth += 1,
+                Node::Unary(_) => {
+                    if depth == 0 {
+                        return None;
+                    }
+                }
+                Node::Binary(_) => {
+                    if depth < 2 {
+                        return None;
+                    }
+                    depth -= 1;
+                }
+            }
+        }
+        (depth == 1).then_some(Self { nodes })
+    }
+
+    /// Index of the first node of the subtree that ends at node `end` (postfix order).
+    pub fn subtree_start(&self, end: usize) -> usize {
+        let mut need: i64 = 1;
+        let mut i = end.min(self.nodes.len().saturating_sub(1));
+        loop {
+            need -= 1;
+            need += match self.nodes[i] {
+                Node::Const(_) | Node::Var(_) => 0,
+                Node::Unary(_) => 1,
+                Node::Binary(_) => 2,
+            };
+            if need == 0 || i == 0 {
+                return i;
+            }
+            i -= 1;
+        }
+    }
+
+    /// The subtree ending at node `end`.
+    pub fn subtree(&self, end: usize) -> Self {
+        let s = self.subtree_start(end);
+        Self {
+            nodes: self.nodes[s..=end].to_vec(),
+        }
+    }
+
+    /// Replace the subtree ending at node `end` with `with`.
+    pub fn replace_subtree(&self, end: usize, with: &Expr) -> Self {
+        let s = self.subtree_start(end);
+        let mut nodes = Vec::with_capacity(self.nodes.len() + with.nodes.len());
+        nodes.extend_from_slice(&self.nodes[..s]);
+        nodes.extend_from_slice(&with.nodes);
+        nodes.extend_from_slice(&self.nodes[end + 1..]);
+        Self { nodes }
+    }
+
+    /// Replace the node at `i` with another node of the same arity. Returns `None` on arity
+    /// mismatch.
+    pub fn with_node(&self, i: usize, node: Node) -> Option<Self> {
+        let arity = |n: &Node| match n {
+            Node::Const(_) | Node::Var(_) => 0,
+            Node::Unary(_) => 1,
+            Node::Binary(_) => 2,
+        };
+        let old = self.nodes.get(i)?;
+        if arity(old) != arity(&node) {
+            return None;
+        }
+        let mut nodes = self.nodes.clone();
+        nodes[i] = node;
+        Some(Self { nodes })
+    }
+
     /// Number of nodes.
     pub fn len(&self) -> usize {
         self.nodes.len()

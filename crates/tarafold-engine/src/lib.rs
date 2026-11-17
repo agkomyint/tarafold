@@ -192,6 +192,7 @@ fn fit_target(
             val_x: &prepared.vx,
             val_y: &prepared.vy,
             config: &cfg.discover,
+            seed: cfg.seed,
         })
     })
     .map_err(|e| EngineError::Data(e.to_string()))?;

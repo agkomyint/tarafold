@@ -6,6 +6,7 @@
 
 mod basis;
 mod enet;
+mod gp;
 mod lm;
 mod subset;
 
@@ -33,6 +34,8 @@ pub enum Strategy {
     LogLog,
     /// Sparse regression of `log y` on the basis library (exponentials).
     LogTarget,
+    /// Genetic-programming symbolic regression.
+    Genetic,
 }
 
 /// One candidate equation over the feature index space.
@@ -75,6 +78,8 @@ pub struct DiscoverInput<'a> {
     pub val_y: &'a [f64],
     /// Settings.
     pub config: &'a DiscoverConfig,
+    /// Seed for the stochastic search.
+    pub seed: u64,
 }
 
 /// Discovery output.
@@ -575,6 +580,44 @@ pub fn discover(input: &DiscoverInput<'_>) -> Result<DiscoverOutput, DiscoverErr
                 skipped_reason: Some(why),
                 candidates: 0,
             },
+        });
+    }
+
+    if cfg.gp.enabled {
+        // Seed GP with the best sparse-regression candidates by validation loss.
+        let mut order: Vec<usize> = (0..pool.cands.len()).collect();
+        order.sort_by(|&a, &b| {
+            pool.cands[a]
+                .val_nmse
+                .total_cmp(&pool.cands[b].val_nmse)
+                .then(a.cmp(&b))
+        });
+        let seeds: Vec<Expr> = order
+            .iter()
+            .filter(|&&i| pool.cands[i].complexity <= cfg.gp.max_complexity)
+            .take(32)
+            .map(|&i| pool.cands[i].expr.clone())
+            .collect();
+        let (found, evals) = gp::search(input.train_x, y, &seeds, &cfg.gp, input.seed);
+        pool.evaluated += evals;
+        let mut k = 0;
+        for e in found {
+            if pool.add(e, Strategy::Genetic) {
+                k += 1;
+            }
+        }
+        strategies.push(StrategyRun {
+            strategy: Strategy::Genetic,
+            ran: true,
+            skipped_reason: None,
+            candidates: k,
+        });
+    } else {
+        strategies.push(StrategyRun {
+            strategy: Strategy::Genetic,
+            ran: false,
+            skipped_reason: Some("disabled in configuration".into()),
+            candidates: 0,
         });
     }
 

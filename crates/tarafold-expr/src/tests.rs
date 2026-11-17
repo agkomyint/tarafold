@@ -155,3 +155,31 @@ fn rejects_bad_input() {
     assert!(parse("x; rm -rf", &n).is_err());
     assert!(parse(&"(".repeat(1000), &n).is_err());
 }
+
+#[test]
+fn subtree_editing() {
+    let n = names(&["x", "y"]);
+    let e = parse("(x + 2) * log(y)", &n).unwrap();
+    // Postfix: x 2 + y log *
+    assert_eq!(e.subtree(2).to_infix(&n), "x + 2.0");
+    assert_eq!(e.subtree(4).to_infix(&n), "log(y)");
+    assert_eq!(e.subtree(5), e);
+    let r = e.replace_subtree(2, &parse("square(x)", &n).unwrap());
+    assert_eq!(r.to_infix(&n), "square(x) * log(y)");
+    let m = e.with_node(5, Node::Binary(BinOp::Div)).unwrap();
+    assert_eq!(m.to_infix(&n), "(x + 2.0) / log(y)");
+    assert!(e.with_node(5, Node::Var(0)).is_none());
+    assert!(Expr::from_nodes(vec![Node::Var(0), Node::Binary(BinOp::Add)]).is_none());
+    assert!(Expr::from_nodes(vec![Node::Var(0), Node::Var(1)]).is_none());
+    assert_eq!(Expr::from_nodes(e.nodes().to_vec()), Some(e.clone()));
+    let mut r = Rng::derive(5, &[]);
+    for _ in 0..500 {
+        let e = random_expr(&mut r, 5, 2);
+        for end in 0..e.len() {
+            let s = e.subtree(end);
+            assert!(Expr::from_nodes(s.nodes().to_vec()).is_some());
+            let back = e.replace_subtree(end, &s);
+            assert_eq!(back, e);
+        }
+    }
+}

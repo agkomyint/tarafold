@@ -13,6 +13,10 @@ struct Outcome {
 
 /// Generate, split, discover, and compare the selected equation with the truth.
 fn run(name: &str, rows: usize, noise: f64, distractors: usize) -> Outcome {
+    run_seeded(name, rows, noise, distractors, 1)
+}
+
+fn run_seeded(name: &str, rows: usize, noise: f64, distractors: usize, seed: u64) -> Outcome {
     let g = generate(&find(name).unwrap(), rows, noise, distractors, 11).unwrap();
     let p = g.truth.features.len();
     let split = Split::new(rows, 0.6, 0.2, SplitStrategy::Random, 3).unwrap();
@@ -30,6 +34,7 @@ fn run(name: &str, rows: usize, noise: f64, distractors: usize) -> Outcome {
         val_x: &vx,
         val_y: &vy,
         config: &cfg,
+        seed,
     })
     .unwrap();
     let sel = &out.front[out.selected];
@@ -94,12 +99,49 @@ fn noisy_data_stays_accurate() {
 }
 
 #[test]
-fn hard_forms_get_reasonable_approximations() {
-    // Not exactly expressible by sparse regression; GP (Phase 3) is expected to recover them.
+fn genetic_search_recovers_non_basis_forms() {
+    // Not expressible by sparse regression; found by the GP stage. GP is stochastic, so this
+    // checks the recovery rate over several search seeds rather than one lucky seed.
     for name in ["rational", "exp-log"] {
-        let o = run(name, 600, 0.0, 0);
-        assert!(o.test_nmse < 0.05, "{name}: test NMSE {}", o.test_nmse);
+        let hits = (0..5)
+            .filter(|&s| run_seeded(name, 600, 0.0, 0, s).equivalent)
+            .count();
+        assert!(hits >= 4, "{name}: recovered {hits}/5");
     }
+}
+
+#[test]
+fn genetic_search_is_thread_count_independent() {
+    let g = generate(&find("rational").unwrap(), 300, 0.05, 0, 4).unwrap();
+    let split = Split::new(300, 0.6, 0.2, SplitStrategy::Random, 3).unwrap();
+    let pick = |rows: &[u32], j: usize| stats::gather(&g.columns[j], rows);
+    let tx: Vec<Vec<f64>> = (0..2).map(|j| pick(&split.train, j)).collect();
+    let vx: Vec<Vec<f64>> = (0..2).map(|j| pick(&split.val, j)).collect();
+    let (ty, vy) = (pick(&split.train, 2), pick(&split.val, 2));
+    let mut cfg = DiscoverConfig::default();
+    cfg.gp.max_evals = 30_000;
+    let run_with = |threads: usize| {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            let out = discover(&DiscoverInput {
+                train_x: &tx,
+                train_y: &ty,
+                val_x: &vx,
+                val_y: &vy,
+                config: &cfg,
+                seed: 9,
+            })
+            .unwrap();
+            out.front
+                .iter()
+                .map(|c| format!("{:?}", c.expr.nodes()))
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(run_with(1), run_with(4));
 }
 
 #[test]

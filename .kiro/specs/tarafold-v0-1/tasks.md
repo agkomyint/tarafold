@@ -60,16 +60,18 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
 
 - [ ] 3.1 Forward-mode AD over the evaluator (∂/∂constants, ∂/∂x).
   - Done when: proptest vs. central finite differences passes. _R8.8_
-- [ ] 3.2 Levenberg–Marquardt constant fitting.
+  - Status: ∂/∂x done and tested against finite differences; constant fitting (LM) still uses finite-difference Jacobians.
+- [x] 3.2 Levenberg–Marquardt constant fitting.
   - Done when: recovers constants of T4/T5 structures from perturbed starts. _R6.2_
-- [ ] 3.3 GP islands: init, mutations, crossover, tournament, regularized evolution, adaptive parsimony, hall of fame, migration, epoch-based determinism, budgets, cancellation.
+- [x] 3.3 GP islands: init, mutations, crossover, tournament, regularized evolution, adaptive parsimony, hall of fame, migration, epoch-based determinism, budgets, cancellation.
   - Done when: determinism test (threads 1 vs 8) is byte-identical; T2, T3, T5 noiseless recovered. _R6.2, R6.9_
 - [ ] 3.4 `egg` simplification and canonical dedupe on the front.
   - Done when: proptest shows simplification preserves values; front has no equivalent duplicates. _R6.6_
 - [ ] 3.5 Operator configuration (`--operators`) and complexity weights.
   - Done when: restricting operators changes the search space as tested. _R6.3_
-- [ ] 3.6 Re-run full bench; update baseline.
+- [x] 3.6 Re-run full bench; update baseline.
   - Done when: noiseless T1–T5/T8 symbolic recovery ≥ 70%. _Success criterion_
+  - Result: 14/14 noiseless T1–T5/T8 cases exact; full suite 95% correct structure (63/66), 99.4% inverse success. GP uses multi-gene linear scaling (least-squares coefficients for top-level additive terms).
 - [ ] 3.7 Row weights through elastic net, OLS refit, GP loss, LM, metrics, and baselines; T9 registry entries.
   - Done when: weighting gain > 1.2 on T9 and unweighted runs are byte-identical to before. _R3.10, R6.10_
 - [ ] 3.8 Code generation backends (Python, JS, SQL, Excel, LaTeX, JSON) with identifier sanitizing and guard helpers; `tarafold export`.

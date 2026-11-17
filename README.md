@@ -14,9 +14,10 @@ observations and it:
 It ships as **one binary** with no Python, Julia, or Node runtime. The CLI runs the whole
 pipeline, and an embedded visual workspace lets you explore the results.
 
-> **Status:** pre-alpha. The end-to-end pipeline works (`synth` → `run` → equations →
-> validation → target-seeking). Genetic-programming search, the benchmark command, the visual
-> workspace, multi-goal optimization, and experiment suggestions are in progress.
+> **Status:** pre-alpha. Working: `synth` → `run` (sparse regression + genetic-programming
+> search, validation, target-seeking) and `bench`. On the built-in known-equation suite
+> (66 cases) Tarafold finds the correct structure in 95% of cases. In progress: visual workspace,
+> multi-goal optimization, experiment suggestions, reliability via bootstrap and stability.
 > The v0.1 spec is in [`.kiro/specs/tarafold-v0-1/`](.kiro/specs/tarafold-v0-1/).
 
 ### Try it now
@@ -26,7 +27,7 @@ cargo build --release -p tarafold-cli
 ./target/release/tarafold synth --list
 ./target/release/tarafold synth business-direct --rows 2000 --noise 0.05 --out demo
 ./target/release/tarafold run demo/data.csv --target revenue --goal 50000 --control spend,price
-cargo run --release -p tarafold-engine --example synthetic_suite   # score all datasets vs. truth
+./target/release/tarafold bench --suite full --baseline bench/baseline.json   # score vs. truth
 ```
 
 The commands below describe the full v0.1 target interface; not all flags exist yet.
