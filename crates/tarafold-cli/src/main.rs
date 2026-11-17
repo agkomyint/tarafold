@@ -39,6 +39,10 @@ enum Command {
     Synth(SynthArgs),
     /// Run the known-equation benchmark and score discovery against the truth.
     Bench(BenchArgs),
+    /// Profile every numeric column: statistics, histograms, outliers, flags.
+    Profile(ProfileArgs),
+    /// Show how each feature relates to a target and which would be passed to discovery.
+    Relate(RelateArgs),
     /// Print the JSON Schema of report.json.
     Schema,
 }
@@ -121,6 +125,33 @@ struct RunArgs {
     /// Output directory.
     #[arg(long, default_value = "tarafold-out")]
     out: PathBuf,
+    /// Output format on stdout.
+    #[arg(long, value_enum, default_value = "human")]
+    format: Format,
+}
+
+#[derive(Args)]
+struct ProfileArgs {
+    /// CSV file, or `-` for stdin.
+    input: String,
+    /// Output format on stdout.
+    #[arg(long, value_enum, default_value = "human")]
+    format: Format,
+}
+
+#[derive(Args)]
+struct RelateArgs {
+    /// CSV file, or `-` for stdin.
+    input: String,
+    /// Target column.
+    #[arg(long, short)]
+    target: String,
+    /// Maximum features passed to discovery.
+    #[arg(long)]
+    max_features: Option<usize>,
+    /// Seed.
+    #[arg(long)]
+    seed: Option<u64>,
     /// Output format on stdout.
     #[arg(long, value_enum, default_value = "human")]
     format: Format,
@@ -315,17 +346,7 @@ fn cmd_run(a: &RunArgs) -> Result<u8, Failure> {
     };
     opts.required
         .extend(cfg.optimize.controllables.iter().cloned());
-    let data = if a.input == "-" {
-        let mut buf = Vec::new();
-        std::io::stdin()
-            .lock()
-            .read_to_end(&mut buf)
-            .context("reading stdin")?;
-        read_csv(buf.as_slice(), "stdin", &opts)?
-    } else {
-        let f = fs::File::open(&a.input).with_context(|| format!("opening {}", a.input))?;
-        read_csv(f, &a.input, &opts)?
-    };
+    let data = load(&a.input, &opts)?;
     if tty {
         eprintln!(
             "Read {} rows × {} numeric columns from {}",
@@ -432,6 +453,147 @@ fn cmd_bench(a: &BenchArgs) -> Result<u8, Failure> {
     Ok(code)
 }
 
+fn load(input: &str, opts: &IngestOptions) -> Result<tarafold_core::Dataset, Failure> {
+    Ok(if input == "-" {
+        let mut buf = Vec::new();
+        std::io::stdin()
+            .lock()
+            .read_to_end(&mut buf)
+            .context("reading stdin")?;
+        read_csv(buf.as_slice(), "stdin", opts)?
+    } else {
+        let f = fs::File::open(input).with_context(|| format!("opening {input}"))?;
+        read_csv(f, input, opts)?
+    })
+}
+
+fn cmd_profile(a: &ProfileArgs) -> Result<u8, Failure> {
+    let data = load(&a.input, &IngestOptions::default())?;
+    let prof = tarafold_profile::profile(&data);
+    match a.format {
+        Format::Json => {
+            let s = serde_json::to_string_pretty(&prof).map_err(|e| anyhow!(e.to_string()))?;
+            println!("{s}");
+        }
+        Format::Human => {
+            println!(
+                "{} rows × {} numeric columns from {}",
+                data.n_rows,
+                data.columns.len(),
+                data.source.path
+            );
+            for e in &data.source.excluded {
+                println!("  excluded {} ({})", e.name, e.reason);
+            }
+            println!(
+                "{:<20} {:>12} {:>12} {:>12} {:>12} {:>7} {:>8} {:>8}  flags",
+                "column", "min", "median", "max", "std", "skew", "unique", "outliers"
+            );
+            for p in &prof {
+                let mut flags = Vec::new();
+                if p.integer_valued {
+                    flags.push("integer");
+                }
+                if p.bounded_unit {
+                    flags.push("in [0,1]");
+                }
+                if p.all_positive {
+                    flags.push("positive");
+                }
+                println!(
+                    "{:<20} {:>12.5} {:>12.5} {:>12.5} {:>12.5} {:>7.2} {:>8} {:>8}  {}",
+                    p.name,
+                    p.min,
+                    p.quantiles.p50,
+                    p.max,
+                    p.std,
+                    p.skewness,
+                    p.unique,
+                    p.outliers,
+                    flags.join(", ")
+                );
+            }
+        }
+    }
+    Ok(0)
+}
+
+fn cmd_relate(a: &RelateArgs) -> Result<u8, Failure> {
+    let opts = IngestOptions {
+        required: vec![a.target.clone()],
+        ..Default::default()
+    };
+    let data = load(&a.input, &opts)?;
+    let mut cfg = RunConfig {
+        targets: vec![a.target.clone()],
+        ..Default::default()
+    };
+    if let Some(s) = a.seed {
+        cfg.seed = s;
+    }
+    if let Some(m) = a.max_features {
+        cfg.discover.max_features = m.max(1);
+    }
+    let (rep, screening) = tarafold_engine::relate(&data, &cfg, &a.target)?;
+    match a.format {
+        Format::Json => {
+            let v =
+                serde_json::json!({ "target": a.target, "relate": rep, "screening": screening });
+            let s = serde_json::to_string_pretty(&v).map_err(|e| anyhow!(e.to_string()))?;
+            println!("{s}");
+        }
+        Format::Human => {
+            println!("Target {}  ({} rows)", a.target, data.n_rows);
+            for b in &rep.baselines {
+                println!(
+                    "Baseline {:<6} R²(val) {:.4}  R²(test) {:.4}  [{}]",
+                    b.model,
+                    b.val_r2,
+                    b.test_r2.unwrap_or(f64::NAN),
+                    b.detail
+                );
+            }
+            println!(
+                "\n{:<20} {:>8} {:>9} {:>8} {:>8} {:>11} {:>8}  discovery",
+                "feature", "pearson", "spearman", "MI r²", "dCor", "importance", "VIF"
+            );
+            for (f, s) in rep.features.iter().zip(&screening) {
+                let verdict = if s.kept {
+                    "kept".to_string()
+                } else {
+                    format!("dropped: {}", s.reason)
+                };
+                println!(
+                    "{:<20} {:>8.3} {:>9.3} {:>8.3} {:>8.3} {:>11.4} {:>8.1}  {verdict}",
+                    f.feature,
+                    f.pearson,
+                    f.spearman,
+                    f.mi_r2,
+                    f.distance_correlation,
+                    f.importance,
+                    f.vif.min(1e6)
+                );
+            }
+            if !rep.interactions.is_empty() {
+                println!("\nInteractions (Friedman H², strongest first):");
+                for i in rep.interactions.iter().take(5) {
+                    println!("  {} × {}  H² = {:.3}", i.a, i.b, i.h2);
+                }
+            }
+            for p in &rep.collinear {
+                println!("Collinear: {} ~ {} (r = {:.3})", p.a, p.b, p.r);
+            }
+            for l in &rep.leakage {
+                println!("Possible leakage: `{l}` has |r| > 0.999 with the target");
+            }
+            println!(
+                "\nThese measure association in this data, not the effect of changing a feature."
+            );
+        }
+    }
+    Ok(0)
+}
+
 fn cmd_synth(a: &SynthArgs) -> Result<u8, Failure> {
     if a.list {
         for e in tarafold_synth::registry() {
@@ -474,6 +636,8 @@ fn main() -> ExitCode {
         Command::Run(a) => cmd_run(a),
         Command::Synth(a) => cmd_synth(a),
         Command::Bench(a) => cmd_bench(a),
+        Command::Profile(a) => cmd_profile(a),
+        Command::Relate(a) => cmd_relate(a),
         Command::Schema => tarafold_report::schema_json()
             .map_err(Failure::from)
             .map(|s| {

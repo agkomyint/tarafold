@@ -1,6 +1,6 @@
 [package]
 name = "tarafold-relate"
-description = "Relationship discovery (Phase 4)."
+description = "Relationship discovery for Tarafold: correlations, mutual information, baselines, importance, interactions, screening."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,10 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+tarafold-core.workspace = true
+serde.workspace = true
+schemars.workspace = true
+rayon.workspace = true
 
 [lints]
 workspace = true

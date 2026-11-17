@@ -9,8 +9,8 @@ use tarafold_discover::{DiscoverInput, discover};
 use tarafold_optimize::{Problem, optimize};
 use tarafold_report::{
     CandidateReport, ColumnSummary, DatasetInfo, DiscoverReport, EquationReport, OptimizeReport,
-    Report, RunInfo, RunStatus, SCHEMA_VERSION, ScreenDecision, SplitMetrics, StageTiming,
-    TargetReport, ValidateReport, Warning, text,
+    Report, RunInfo, RunStatus, SCHEMA_VERSION, SplitMetrics, StageTiming, TargetReport,
+    ValidateReport, Warning, text,
 };
 use tarafold_validate::{Domain, Grade, GradeInputs, evidence, grade, residual_halfwidth, score};
 
@@ -81,6 +81,112 @@ fn timed<T>(stages: &mut Vec<StageTiming>, name: &str, f: impl FnOnce() -> T) ->
     out
 }
 
+/// Relationship analysis of `target` against `features` with baseline test R² filled in.
+/// Returns the analysis and the best baseline test R² (−∞ when none is finite).
+fn relate_features(
+    data: &Dataset,
+    split: &Split,
+    features: &[usize],
+    y: &[f64],
+    cfg: &RunConfig,
+    target: &str,
+    stages: &mut Vec<StageTiming>,
+) -> (tarafold_relate::Relate, f64) {
+    let names: Vec<String> = features
+        .iter()
+        .map(|&j| data.columns[j].name.clone())
+        .collect();
+    let cols = |rows: &[u32]| -> Vec<Vec<f64>> {
+        features
+            .iter()
+            .map(|&j| stats::gather(&data.columns[j].values, rows))
+            .collect()
+    };
+    let (tx, vx, sx) = (cols(&split.train), cols(&split.val), cols(&split.test));
+    let (ty, vy, sy) = (
+        stats::gather(y, &split.train),
+        stats::gather(y, &split.val),
+        stats::gather(y, &split.test),
+    );
+    let mut rel = timed(stages, &format!("relate:{target}"), || {
+        tarafold_relate::analyze(&tarafold_relate::RelateInput {
+            names: &names,
+            train_x: &tx,
+            train_y: &ty,
+            val_x: &vx,
+            val_y: &vy,
+            seed: cfg.seed,
+        })
+    });
+    let ridge_test = rel
+        .ridge
+        .as_ref()
+        .map(|r| tarafold_validate::metrics(&r.predict(&sx), &sy).r2);
+    let gbdt_test = tarafold_validate::metrics(&rel.gbdt.predict(&sx), &sy).r2;
+    for b in &mut rel.report.baselines {
+        b.test_r2 = if b.model == "ridge" {
+            ridge_test
+        } else {
+            Some(gbdt_test)
+        };
+    }
+    let best = rel
+        .report
+        .baselines
+        .iter()
+        .filter_map(|b| b.test_r2)
+        .filter(|v| v.is_finite())
+        .fold(f64::NEG_INFINITY, f64::max);
+    (rel, best)
+}
+
+/// Relationship analysis and screening for one target without equation discovery
+/// (`tarafold relate`).
+pub fn relate(
+    data: &Dataset,
+    cfg: &RunConfig,
+    target: &str,
+) -> Result<
+    (
+        tarafold_relate::RelateReport,
+        Vec<tarafold_relate::ScreenDecision>,
+    ),
+    EngineError,
+> {
+    let ti = data.index_of(target).map_err(|_| {
+        EngineError::Config(format!("target `{target}` is not a usable numeric column"))
+    })?;
+    let features: Vec<usize> = (0..data.columns.len()).filter(|&j| j != ti).collect();
+    if features.is_empty() {
+        return Err(EngineError::Data(
+            "no feature columns besides the target".into(),
+        ));
+    }
+    let split = Split::new(
+        data.n_rows,
+        cfg.split.train,
+        cfg.split.val,
+        cfg.split.strategy,
+        cfg.seed,
+    )
+    .map_err(|e| EngineError::Config(e.to_string()))?;
+    let (rel, _) = relate_features(
+        data,
+        &split,
+        &features,
+        &data.columns[ti].values,
+        cfg,
+        target,
+        &mut Vec::new(),
+    );
+    let screening = tarafold_relate::screen(
+        &rel.report,
+        cfg.discover.max_features.max(1),
+        &cfg.optimize.controllables,
+    );
+    Ok((rel.report, screening))
+}
+
 fn fit_target(
     data: &Dataset,
     split: &Split,
@@ -101,57 +207,30 @@ fn fit_target(
         ));
     }
 
-    // Screening: keep up to max_features by |Pearson r| with the target on training rows.
-    // (Phase 4 replaces this with importance + mutual information.)
-    let mut ranked: Vec<(f64, usize)> = all_features
-        .iter()
-        .map(|&j| {
-            (
-                stats::pearson(
-                    &stats::gather(&data.columns[j].values, &split.train),
-                    &ty_full,
-                )
-                .abs(),
-                j,
-            )
-        })
-        .collect();
-    ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
     let max_f = cfg.discover.max_features.max(1);
-    let mut screening = Vec::new();
-    let mut kept: Vec<usize> = Vec::new();
-    for (rank, (r, j)) in ranked.iter().enumerate() {
-        let keep = rank < max_f;
-        if keep {
-            kept.push(*j);
-        }
-        screening.push(ScreenDecision {
-            feature: data.columns[*j].name.clone(),
-            kept: keep,
-            reason: if keep {
-                format!("rank {} of {} by |r| = {:.3}", rank + 1, ranked.len(), r)
-            } else {
-                format!("rank {} exceeds max_features = {max_f}", rank + 1)
-            },
-        });
+    let (rel, best_baseline) = relate_features(data, split, &all_features, y, cfg, target, stages);
+    let screening = tarafold_relate::screen(&rel.report, max_f, &cfg.optimize.controllables);
+    let mut kept: Vec<usize> = screening
+        .iter()
+        .zip(&all_features)
+        .filter(|(d, _)| d.kept)
+        .map(|(_, &j)| j)
+        .collect();
+    if kept.is_empty() {
+        kept = all_features.iter().copied().take(max_f).collect();
     }
-    kept.sort_unstable();
-    if ranked.len() > max_f {
+    let dropped = all_features.len() - kept.len();
+    if dropped > 0 {
         warnings.push(Warning {
             code: "features_screened".into(),
             message: format!(
-                "{} features were not used because max_features = {max_f}",
-                ranked.len() - max_f
+                "{dropped} of {} features were not passed to equation discovery (see screening)",
+                all_features.len()
             ),
             target: Some(target.into()),
         });
     }
-    let leakage: Vec<String> = ranked
-        .iter()
-        .filter(|(r, _)| *r > 0.999)
-        .map(|(_, j)| data.columns[*j].name.clone())
-        .collect();
-
+    let leakage: Vec<String> = rel.report.leakage.clone();
     // Subsample training rows for discovery.
     let mut train_rows = split.train.clone();
     if train_rows.len() > cfg.discover.max_rows {
@@ -249,7 +328,7 @@ fn fit_target(
         } else {
             f64::NEG_INFINITY
         },
-        best_baseline_r2: None,
+        best_baseline_r2: best_baseline.is_finite().then_some(best_baseline),
         stability: None,
         n_train: prepared.ty.len(),
         n_constants: sel.expr.constants().len(),
@@ -277,6 +356,7 @@ fn fit_target(
     let report = TargetReport {
         target: target.into(),
         features: names.clone(),
+        relate: rel.report,
         screening,
         discover: DiscoverReport {
             front,
@@ -486,6 +566,7 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
         ));
     }
 
+    let profile = timed(&mut stages, "profile", || tarafold_profile::profile(data));
     let mut fitted = Vec::new();
     for t in &cfg.targets {
         fitted.push(fit_target(
@@ -569,6 +650,7 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
             source: data.source.clone(),
             n_rows: data.n_rows,
             columns: summarize(data),
+            profile,
             data_source: cfg.data_source,
             weighted: data.weights.is_some(),
         },

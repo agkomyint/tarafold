@@ -15,6 +15,8 @@ tarafold-discover.workspace = true
 tarafold-validate.workspace = true
 tarafold-optimize.workspace = true
 tarafold-report.workspace = true
+tarafold-relate.workspace = true
+tarafold-profile.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

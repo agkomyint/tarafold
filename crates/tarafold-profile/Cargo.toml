@@ -1,6 +1,6 @@
 [package]
 name = "tarafold-profile"
-description = "Column profiling (Phase 4)."
+description = "Column profiling for Tarafold: statistics, histograms, outliers and flags."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,10 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+tarafold-core.workspace = true
+serde.workspace = true
+schemars.workspace = true
+rayon.workspace = true
 
 [lints]
 workspace = true

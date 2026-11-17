@@ -651,6 +651,7 @@ dependencies = [
  "tarafold-core",
  "tarafold-engine",
  "tarafold-io",
+ "tarafold-profile",
  "tarafold-report",
  "tarafold-synth",
  "tempfile",
@@ -690,6 +691,8 @@ dependencies = [
  "tarafold-expr",
  "tarafold-io",
  "tarafold-optimize",
+ "tarafold-profile",
+ "tarafold-relate",
  "tarafold-report",
  "tarafold-synth",
  "tarafold-validate",
@@ -730,10 +733,22 @@ dependencies = [
 [[package]]
 name = "tarafold-profile"
 version = "0.1.0-dev"
+dependencies = [
+ "rayon",
+ "schemars",
+ "serde",
+ "tarafold-core",
+]
 
 [[package]]
 name = "tarafold-relate"
 version = "0.1.0-dev"
+dependencies = [
+ "rayon",
+ "schemars",
+ "serde",
+ "tarafold-core",
+]
 
 [[package]]
 name = "tarafold-report"
@@ -746,6 +761,8 @@ dependencies = [
  "tarafold-discover",
  "tarafold-expr",
  "tarafold-io",
+ "tarafold-profile",
+ "tarafold-relate",
  "tarafold-validate",
 ]
 

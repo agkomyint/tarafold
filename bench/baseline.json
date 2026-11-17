@@ -1,15 +1,15 @@
 {
   "full": {
-    "accuracy_rate": 0.9696969696969697,
+    "accuracy_rate": 0.9696969696969696,
     "cases": 66,
     "coverage_90_noisy": 0.8837499999999999,
     "errors": 0,
     "exact_rate": 0.4393939393939394,
-    "inverse_success": 0.9939393939393939,
+    "inverse_success": 0.993939393939394,
     "median_complexity_ratio": 1.0,
     "median_extrapolation_r2": 0.9999996981169308,
     "median_oracle_gap": 0.0,
-    "seconds": 198.3873188,
+    "seconds": 207.2636505,
     "structure_rate": 0.9545454545454546,
     "var_precision": 1.0,
     "var_recall": 1.0
@@ -24,7 +24,7 @@
     "median_complexity_ratio": 1.0,
     "median_extrapolation_r2": 0.9999995624181126,
     "median_oracle_gap": 0.0,
-    "seconds": 27.839340799999995,
+    "seconds": 29.109973599999996,
     "structure_rate": 1.0,
     "var_precision": 1.0,
     "var_recall": 1.0

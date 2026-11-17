@@ -13,6 +13,8 @@ use tarafold_core::{DataSource, Evidence, RunConfig, SourceInfo};
 use tarafold_discover::{Strategy, StrategyRun};
 use tarafold_expr::Tree;
 use tarafold_io::{Cell, write_csv};
+use tarafold_profile::ColumnProfile;
+pub use tarafold_relate::{RelateReport, ScreenDecision};
 use tarafold_validate::{Domain, Metrics, Reliability};
 
 /// Report schema version (SemVer, independent of the tool version).
@@ -84,6 +86,8 @@ pub struct DatasetInfo {
     pub n_rows: usize,
     /// Per-column summary.
     pub columns: Vec<ColumnSummary>,
+    /// Per-column profile (R4).
+    pub profile: Vec<ColumnProfile>,
     /// Declared data source.
     pub data_source: DataSource,
     /// Whether row weights were supplied.
@@ -107,17 +111,6 @@ pub struct ColumnSummary {
     pub median: f64,
 }
 
-/// Feature screening decision.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ScreenDecision {
-    /// Feature.
-    pub feature: String,
-    /// Kept for discovery.
-    pub kept: bool,
-    /// Reason.
-    pub reason: String,
-}
-
 /// Results for one target.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TargetReport {
@@ -125,6 +118,8 @@ pub struct TargetReport {
     pub target: String,
     /// Features passed to discovery.
     pub features: Vec<String>,
+    /// Relationship analysis over all candidate features.
+    pub relate: RelateReport,
     /// Screening decisions.
     pub screening: Vec<ScreenDecision>,
     /// Discovery.

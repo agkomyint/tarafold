@@ -79,16 +79,17 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
 
 ## Phase 4 — Relationships
 
-- [ ] 4.1 Profile stage (moments, quantiles, histograms, MAD outliers, flags); `tarafold profile`.
+- [x] 4.1 Profile stage (moments, quantiles, histograms, MAD outliers, flags); `tarafold profile`.
   - Done when: 1 M × 50 profile < 30 s on a 4-core machine. _R4.1–R4.3, R13.2_
-- [ ] 4.2 Pearson/Spearman matrices, KSG MI (kiddo), distance correlation on subsample.
+- [x] 4.2 Pearson/Spearman matrices, KSG MI (kiddo), distance correlation on subsample.
   - Done when: MI matches the analytic value for correlated Gaussians within 5%. _R5.1, R5.2_
-- [ ] 4.3 Ridge baseline and in-house histogram GBDT with early stopping.
+- [x] 4.3 Ridge baseline and in-house histogram GBDT with early stopping.
   - Done when: GBDT R² on T6 ≥ 0.95; deterministic across threads. _R5.3_
-- [ ] 4.4 Permutation importance, Friedman H², VIF/collinearity, leakage suspects.
+- [x] 4.4 Permutation importance, Friedman H², VIF/collinearity, leakage suspects.
   - Done when: H² ranks the true interacting pair first on T6. _R5.4–R5.6, R9.7_
-- [ ] 4.5 Feature screening feeding discovery, with recorded reasons; `tarafold relate`.
+- [x] 4.5 Feature screening feeding discovery, with recorded reasons; `tarafold relate`.
   - Done when: distractor variants reach variable-selection precision ≥ 0.9. _R5.7_
+  - Result: profiling 1M × 50 in 1.2 s; variable precision 1.00 on the full bench. Screening deliberately never drops a feature for weak evidence alone (dropping cost 3 gravity cases at 200 rows); it ranks, enforces `max_features`, keeps user-named controllables, and deprioritizes near-duplicates. Importance and MI are counted only above their noise levels.
 
 ## Phase 5 — Reliability
 
