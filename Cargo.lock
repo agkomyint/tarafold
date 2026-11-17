@@ -1190,6 +1190,7 @@ dependencies = [
  "tarafold-discover",
  "tarafold-expr",
  "tarafold-io",
+ "tarafold-optimize",
  "tarafold-profile",
  "tarafold-relate",
  "tarafold-validate",

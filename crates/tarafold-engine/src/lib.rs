@@ -1,18 +1,18 @@
 //! Pipeline orchestration (design §5): split → screen → discover → validate → optimize →
 //! report. Library code only: no printing, no environment access, no sockets.
 
-use std::collections::BTreeMap;
+mod optimize_stage;
+
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rayon::prelude::*;
 use tarafold_core::{DataSource, Dataset, Evidence, Rng, RunConfig, Split, rng::stream, stats};
 use tarafold_discover::{DiscoverInput, discover};
 use tarafold_expr::Expr;
-use tarafold_optimize::{Problem, optimize};
 use tarafold_report::{
-    CandidateReport, ColumnSummary, DatasetInfo, DiscoverReport, EquationReport, OptimizeReport,
-    Report, RunInfo, RunStatus, SCHEMA_VERSION, SplitMetrics, Stability, StageTiming, TargetReport,
-    ValidateReport, Warning, text,
+    ColumnSummary, DatasetInfo, DiscoverReport, EquationReport, Report, RunInfo, RunStatus,
+    SCHEMA_VERSION, SplitMetrics, Stability, StageTiming, TargetReport, ValidateReport, Warning,
+    text,
 };
 use tarafold_validate::reliability;
 use tarafold_validate::{Domain, Grade, GradeInputs, evidence, grade, score};
@@ -54,26 +54,26 @@ fn summarize(d: &Dataset) -> Vec<ColumnSummary> {
         .collect()
 }
 
-struct Prepared {
-    names: Vec<String>,
+pub(crate) struct Prepared {
+    pub(crate) names: Vec<String>,
     tx: Vec<Vec<f64>>,
     vx: Vec<Vec<f64>>,
     sx: Vec<Vec<f64>>,
-    ty: Vec<f64>,
+    pub(crate) ty: Vec<f64>,
     vy: Vec<f64>,
     sy: Vec<f64>,
 }
 
 /// Fitted state for one target, kept for optimization.
-struct Fitted {
-    report: TargetReport,
-    expr: tarafold_expr::Expr,
-    domain: Domain,
-    prepared: Prepared,
-    halfwidth: f64,
-    sigma: f64,
-    ensemble: Vec<Vec<f64>>,
-    evidence: Evidence,
+pub(crate) struct Fitted {
+    pub(crate) report: TargetReport,
+    pub(crate) expr: tarafold_expr::Expr,
+    pub(crate) domain: Domain,
+    pub(crate) prepared: Prepared,
+    pub(crate) halfwidth: f64,
+    pub(crate) sigma: f64,
+    pub(crate) ensemble: Vec<Vec<f64>>,
+    pub(crate) evidence: Evidence,
 }
 
 fn timed<T>(stages: &mut Vec<StageTiming>, name: &str, f: impl FnOnce() -> T) -> T {
@@ -205,7 +205,18 @@ fn fit_target(
     })?;
     let y = &data.columns[ti].values;
     let ty_full = stats::gather(y, &split.train);
-    let all_features: Vec<usize> = (0..data.columns.len()).filter(|&j| j != ti).collect();
+    // Other targets are features only if listed earlier (chains follow the given order).
+    let pos = cfg.targets.iter().position(|t| t == target).unwrap_or(0);
+    let blocked: Vec<&String> = cfg
+        .targets
+        .iter()
+        .enumerate()
+        .filter(|(k, _)| cfg.exclude_other_targets || *k >= pos)
+        .map(|(_, t)| t)
+        .collect();
+    let all_features: Vec<usize> = (0..data.columns.len())
+        .filter(|&j| j != ti && !blocked.contains(&&data.columns[j].name))
+        .collect();
     if all_features.is_empty() {
         return Err(EngineError::Data(
             "no feature columns besides the target".into(),
@@ -549,145 +560,6 @@ fn fit_target(
         evidence: ev,
     })
 }
-fn run_optimize(
-    f: &Fitted,
-    cfg: &RunConfig,
-    goal: f64,
-    seed: u64,
-) -> Result<OptimizeReport, EngineError> {
-    let names = &f.prepared.names;
-    let oc = &cfg.optimize;
-    let idx = |n: &str| -> Result<usize, EngineError> {
-        names.iter().position(|m| m == n).ok_or_else(|| {
-            EngineError::Config(format!(
-                "`{n}` is not a feature used for `{}` (features: {})",
-                f.report.target,
-                names.join(", ")
-            ))
-        })
-    };
-    let controllables: Vec<usize> = if oc.controllables.is_empty() {
-        f.expr.variables().iter().map(|&v| v as usize).collect()
-    } else {
-        oc.controllables
-            .iter()
-            .map(|n| idx(n))
-            .collect::<Result<_, _>>()?
-    };
-    if controllables.is_empty() {
-        return Err(EngineError::Config(
-            "no controllable features; pass --control".into(),
-        ));
-    }
-    let mut baseline = f.domain.median.clone();
-    for (n, v) in &oc.fixed {
-        baseline[idx(n)?] = *v;
-    }
-    let mut bounds = Vec::new();
-    for &j in &controllables {
-        let b = match oc.bounds.get(&names[j]) {
-            Some(&[lo, hi]) if lo <= hi && lo.is_finite() && hi.is_finite() => [lo, hi],
-            Some(b) => {
-                return Err(EngineError::Config(format!(
-                    "invalid bounds for `{}`: {b:?}",
-                    names[j]
-                )));
-            }
-            None => [f.domain.min[j], f.domain.max[j]],
-        };
-        bounds.push(b);
-    }
-    for n in oc.bounds.keys() {
-        if !controllables.iter().any(|&j| &names[j] == n) {
-            return Err(EngineError::Config(format!(
-                "bounds given for `{n}`, which is not a controllable"
-            )));
-        }
-    }
-    let y = &f.prepared.ty;
-    let y_range = y.iter().copied().fold(f64::NEG_INFINITY, f64::max)
-        - y.iter().copied().fold(f64::INFINITY, f64::min);
-    let tolerance = oc.tolerance * y_range.abs().max(1e-12);
-    let out = optimize(&Problem {
-        expr: &f.expr,
-        controllables: controllables.clone(),
-        bounds: bounds.clone(),
-        baseline: baseline.clone(),
-        scale: f.domain.std.clone(),
-        goal,
-        y_scale: stats::std(y),
-        tolerance,
-        domain: &f.domain,
-        n_candidates: oc.n_candidates.max(1),
-        max_evals: oc.max_evals,
-        halfwidth: f.halfwidth,
-        seed,
-    });
-    let cnames: Vec<String> = controllables.iter().map(|&j| names[j].clone()).collect();
-    let by_ctrl = |vals: &[f64]| -> BTreeMap<String, f64> {
-        cnames.iter().cloned().zip(vals.iter().copied()).collect()
-    };
-    let candidates = out
-        .candidates
-        .iter()
-        .enumerate()
-        .map(|(i, c)| CandidateReport {
-            id: i + 1,
-            inputs: controllables
-                .iter()
-                .map(|&j| (names[j].clone(), c.inputs[j]))
-                .collect(),
-            predicted: c.predicted,
-            interval: reliability::prediction_interval(&f.expr, &f.ensemble, &c.inputs, f.sigma),
-            error: c.error,
-            within_tolerance: c.within_tolerance,
-            in_domain: c.domain.in_domain,
-            domain_distance: c.domain.distance,
-            change: by_ctrl(&c.change),
-            change_pct: cnames
-                .iter()
-                .cloned()
-                .zip(c.change_pct.iter().copied())
-                .collect(),
-            sensitivity: by_ctrl(&c.sensitivity),
-            elasticity: by_ctrl(&c.elasticity),
-        })
-        .collect();
-    let binding = out
-        .binding
-        .iter()
-        .filter_map(|b| {
-            let (j, side) = b.split_once(':')?;
-            Some(format!("{}:{side}", names.get(j.parse::<usize>().ok()?)?))
-        })
-        .collect();
-    let interventional = f.evidence == Evidence::InterventionalFit;
-    Ok(OptimizeReport {
-        target: f.report.target.clone(),
-        goal,
-        tolerance,
-        controllables: cnames.clone(),
-        bounds: cnames.iter().cloned().zip(bounds).collect(),
-        baseline: names.iter().cloned().zip(baseline).collect(),
-        candidates,
-        reached: out.reached,
-        closest_value: out.closest_value,
-        binding,
-        unused_controllables: out
-            .unused_controllables
-            .iter()
-            .map(|&j| names[j].clone())
-            .collect(),
-        evaluations: out.evaluations,
-        evidence: f.evidence,
-        disclaimer: if interventional {
-            text::INTERVENTIONAL_OPTIMIZE_DISCLAIMER.into()
-        } else {
-            text::OBSERVATIONAL_OPTIMIZE_DISCLAIMER.into()
-        },
-    })
-}
-
 /// Run the pipeline on a loaded dataset.
 pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineError> {
     if cfg.targets.is_empty() {
@@ -740,40 +612,94 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
         )?);
     }
 
-    let optimize = match cfg.optimize.goal {
-        None => None,
-        Some(goal) => {
-            if cfg.targets.len() > 1 {
-                warnings.push(Warning {
-                    code: "goal_first_target".into(),
-                    message: format!("the goal applies to the first target `{}`; joint multi-goal optimization arrives in a later version", cfg.targets[0]),
-                    target: None,
-                });
+    let multi = !cfg.optimize.require.is_empty() || !cfg.optimize.prefer.is_empty();
+    let optimize = if multi {
+        if cfg.optimize.goal.is_some() {
+            return Err(EngineError::Config(
+                "use either --goal (one exact goal) or --require/--prefer (multi-goal), not both"
+                    .into(),
+            ));
+        }
+        let shared_names: Vec<String> = data
+            .columns
+            .iter()
+            .map(|c| c.name.clone())
+            .filter(|n| !cfg.targets.contains(n))
+            .collect();
+        let shared_cols: Vec<Vec<f64>> = data
+            .columns
+            .iter()
+            .filter(|c| !cfg.targets.contains(&c.name))
+            .map(|c| stats::gather(&c.values, &split.train))
+            .collect();
+        let shared = optimize_stage::Shared {
+            domain: Domain::fit(&shared_names, &shared_cols),
+            names: shared_names,
+            fitted: &fitted,
+        };
+        Some(timed(&mut stages, "optimize", || {
+            optimize_stage::multi_goal(&shared, cfg, cfg.seed)
+        })?)
+    } else {
+        match cfg.optimize.goal {
+            None => None,
+            Some(goal) => {
+                if cfg.targets.len() > 1 {
+                    warnings.push(Warning {
+                        code: "goal_first_target".into(),
+                        message: format!(
+                            "--goal applies to the first target `{}`; use --require/--prefer for goals on several targets",
+                            cfg.targets[0]
+                        ),
+                        target: None,
+                    });
+                }
+                Some(timed(&mut stages, "optimize", || {
+                    optimize_stage::single_goal(&fitted[0], cfg, goal, cfg.seed)
+                })?)
             }
-            let o = timed(&mut stages, "optimize", || {
-                run_optimize(&fitted[0], cfg, goal, cfg.seed)
-            })?;
-            if !o.unused_controllables.is_empty() {
-                warnings.push(Warning {
-                    code: "unused_controllables".into(),
-                    message: format!(
-                        "the selected equation does not use {}; they were left at baseline",
-                        o.unused_controllables.join(", ")
-                    ),
-                    target: Some(o.target.clone()),
-                });
-            }
-            if !o.reached {
-                warnings.push(Warning {
-                    code: "goal_not_reached".into(),
-                    message: format!("no candidate reaches {} within tolerance; closest predicted value is {:.6}", o.goal, o.closest_value),
-                    target: Some(o.target.clone()),
-                });
-            }
-            Some(o)
         }
     };
-
+    if let Some(o) = &optimize {
+        if !o.unused_controllables.is_empty() {
+            warnings.push(Warning {
+                code: "unused_controllables".into(),
+                message: format!(
+                    "the selected equation does not use {}; they were left at baseline",
+                    o.unused_controllables.join(", ")
+                ),
+                target: Some(o.target.clone()),
+            });
+        }
+        if !o.reached {
+            let message = match &o.conflict {
+                Some(k) => format!(
+                    "the goals cannot all be met; conflicting: {}",
+                    k.goals.join(", ")
+                ),
+                None if o.goal.is_finite() => format!(
+                    "no candidate reaches {} within tolerance; closest predicted value is {:.6}",
+                    o.goal, o.closest_value
+                ),
+                None => "no candidate satisfies every hard goal and constraint".into(),
+            };
+            warnings.push(Warning {
+                code: "goal_not_reached".into(),
+                message,
+                target: Some(o.target.clone()),
+            });
+        }
+        for r in &o.redundant_objectives {
+            warnings.push(Warning {
+                code: "redundant_objectives".into(),
+                message: format!(
+                    "objectives `{}` and `{}` move together (rank correlation {:.2}); consider turning one into a threshold",
+                    r.a, r.b, r.rho
+                ),
+                target: None,
+            });
+        }
+    }
     let outcome = Outcome {
         low_grade: fitted
             .iter()

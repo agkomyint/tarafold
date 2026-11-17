@@ -94,7 +94,77 @@ pub fn render(r: &Report, out: &Path) -> String {
             );
         }
     }
-    if let Some(o) = &r.optimize {
+    if let Some(o) = r.optimize.as_ref().filter(|o| !o.goal.is_finite()) {
+        let _ = writeln!(
+            s,
+            "Goals     {}  ({})",
+            o.goals
+                .iter()
+                .map(|g| {
+                    let kind = if g.hard { "require" } else { "prefer" };
+                    format!("{kind} {}", g.text)
+                })
+                .collect::<Vec<_>>()
+                .join("; "),
+            o.method
+        );
+        if o.candidates.is_empty() {
+            let _ = writeln!(
+                s,
+                "  No candidate satisfies every hard goal and constraint."
+            );
+        }
+        for c in &o.candidates {
+            let inputs: Vec<String> = o
+                .controllables
+                .iter()
+                .map(|n| format!("{n} {}", fmt_num(c.inputs[n])))
+                .collect();
+            let preds: Vec<String> = c
+                .predictions
+                .iter()
+                .map(|(k, v)| format!("{k} {}", fmt_num(*v)))
+                .collect();
+            let p = if c.joint_probability.is_finite() {
+                format!("  P(all hard goals) {:.2}", c.joint_probability)
+            } else {
+                String::new()
+            };
+            let marks = if c.marks.is_empty() {
+                String::new()
+            } else {
+                format!("  [{}]", c.marks.join(", "))
+            };
+            let _ = writeln!(
+                s,
+                "  #{:<2} {}  →  {}{p}{marks}{}",
+                c.id,
+                inputs.join("  "),
+                preds.join("  "),
+                if c.in_domain {
+                    ""
+                } else {
+                    "  outside data domain"
+                }
+            );
+        }
+        if let Some(k) = &o.conflict {
+            let _ = writeln!(
+                s,
+                "  Conflict: no input meets this minimal set of goals: {} (other conflicts may also exist)",
+                k.goals.join(", ")
+            );
+            for (g, v) in &k.best_achievable {
+                let _ = writeln!(
+                    s,
+                    "    best achievable for `{g}` with the others held: {}",
+                    fmt_num(*v)
+                );
+            }
+        }
+        let _ = writeln!(s, "Note      {}", o.disclaimer);
+    }
+    if let Some(o) = r.optimize.as_ref().filter(|o| o.goal.is_finite()) {
         let n_ok = o.candidates.iter().filter(|c| c.within_tolerance).count();
         let _ = writeln!(
             s,

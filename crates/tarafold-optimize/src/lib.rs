@@ -5,11 +5,16 @@
 //! One controllable is solved exactly (all roots); several use differential evolution plus
 //! multi-start Newton projection onto the goal surface, then diversity selection.
 
+pub mod multi;
+pub mod spec;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tarafold_core::{Rng, rng::stream};
 use tarafold_expr::Expr;
 use tarafold_validate::{Domain, DomainCheck};
+
+pub use spec::{Kind, Linear};
 
 /// The optimization problem over a full feature vector.
 pub struct Problem<'a> {
@@ -37,6 +42,10 @@ pub struct Problem<'a> {
     pub max_evals: usize,
     /// Prediction half-width for intervals.
     pub halfwidth: f64,
+    /// Linear constraints over the full feature vector.
+    pub constraints: Vec<Linear>,
+    /// Kind per controllable (empty means all continuous).
+    pub kinds: Vec<Kind>,
     /// Seed.
     pub seed: u64,
 }
@@ -87,16 +96,33 @@ struct Ctx<'a> {
     p: &'a Problem<'a>,
     /// Positions (in `p.controllables`) of controllables that the equation uses.
     active: Vec<usize>,
+    /// Bounds per controllable, rounded inward to each kind's grid.
+    eff_bounds: Vec<[f64; 2]>,
     evals: usize,
 }
 
 impl Ctx<'_> {
+    fn kind(&self, a: usize) -> Kind {
+        self.p.kinds.get(a).copied().unwrap_or(Kind::Continuous)
+    }
+
+    /// Full feature vector, with discrete controllables snapped to their grid.
     fn full(&self, xc: &[f64]) -> Vec<f64> {
         let mut x = self.p.baseline.clone();
         for (k, &a) in self.active.iter().enumerate() {
-            x[self.p.controllables[a]] = xc[k];
+            let [lo, hi] = self.eff_bounds[a];
+            x[self.p.controllables[a]] = self.kind(a).snap(xc[k], lo, hi);
         }
         x
+    }
+
+    /// Total constraint violation at a full feature vector.
+    fn violation(&self, x: &[f64]) -> f64 {
+        self.p
+            .constraints
+            .iter()
+            .map(|c| c.violation(x, &self.p.scale))
+            .sum()
     }
 
     fn f(&mut self, xc: &[f64]) -> f64 {
@@ -105,7 +131,7 @@ impl Ctx<'_> {
     }
 
     fn bounds(&self, k: usize) -> [f64; 2] {
-        self.p.bounds[self.active[k]]
+        self.eff_bounds[self.active[k]]
     }
 
     fn scale(&self, k: usize) -> f64 {
@@ -124,9 +150,13 @@ impl Ctx<'_> {
             let b = self.p.baseline[self.p.controllables[self.active[k]]];
             change += ((v - b) / self.scale(k)).powi(2);
         }
-        let d = self.p.domain.distance(&self.full(xc));
+        let x = self.full(xc);
+        let d = self.p.domain.distance(&x);
         let out = (d - self.p.domain.threshold).max(0.0);
-        r * r + 1e-3 * change + out * out
+        let v = self.violation(&x);
+        // Exact (L1) penalty plus a quadratic term: with a large enough L1 weight the optimum is
+        // feasible rather than slightly outside the constraint.
+        r * r + 1e-3 * change + out * out + 1e4 * v + 1e4 * v * v
     }
 
     fn clamp(&self, xc: &mut [f64]) {
@@ -303,6 +333,156 @@ fn solve_nd(ctx: &mut Ctx<'_>, rng: &mut Rng) -> Vec<Vec<f64>> {
     starts.into_iter().map(|s| ctx.project(s)).collect()
 }
 
+/// Coordinate pattern search on the penalized objective. Discrete coordinates move by whole
+/// grid steps; continuous ones start at 10% of their range and halve down to 1e-7 of it.
+fn pattern_search(ctx: &mut Ctx<'_>, mut xc: Vec<f64>) -> Vec<f64> {
+    let d = xc.len();
+    let mut best = ctx.objective(&xc);
+    let mut steps: Vec<f64> = (0..d)
+        .map(|k| {
+            let [lo, hi] = ctx.bounds(k);
+            match ctx.kind(ctx.active[k]).step() {
+                Some(s) => s * ((hi - lo) / s / 8.0).round().max(1.0),
+                None => 0.1 * (hi - lo),
+            }
+        })
+        .collect();
+    for _ in 0..400 {
+        let mut improved = false;
+        for k in 0..d {
+            for dir in [1.0, -1.0] {
+                let [lo, hi] = ctx.bounds(k);
+                let mut trial = xc.clone();
+                trial[k] = (trial[k] + dir * steps[k]).clamp(lo, hi);
+                let f = ctx.objective(&trial);
+                if f < best {
+                    best = f;
+                    xc = trial;
+                    improved = true;
+                }
+            }
+        }
+        if !improved {
+            let mut any = false;
+            for k in 0..d {
+                let [lo, hi] = ctx.bounds(k);
+                let min_step = ctx
+                    .kind(ctx.active[k])
+                    .step()
+                    .unwrap_or(1e-7 * (hi - lo).max(1e-300));
+                if steps[k] > min_step {
+                    steps[k] = (steps[k] / 2.0).max(min_step);
+                    if let Some(s) = ctx.kind(ctx.active[k]).step() {
+                        steps[k] = (steps[k] / s).round().max(1.0) * s;
+                    }
+                    any = true;
+                }
+            }
+            if !any {
+                break;
+            }
+        }
+    }
+    xc
+}
+
+/// Search with constraints and/or discrete inputs: an exhaustive grid for one discrete
+/// controllable, otherwise differential evolution on snapped inputs plus pattern search.
+fn solve_general(ctx: &mut Ctx<'_>, rng: &mut Rng) -> Vec<Vec<f64>> {
+    let d = ctx.active.len();
+    if d == 1 {
+        let [lo, hi] = ctx.bounds(0);
+        let pts: Vec<f64> = match ctx.kind(ctx.active[0]).step() {
+            Some(s) if (hi - lo) / s <= 100_000.0 => {
+                let n = ((hi - lo) / s).round() as usize;
+                (0..=n).map(|i| lo + s * i as f64).collect()
+            }
+            _ => (0..=2000)
+                .map(|i| lo + (hi - lo) * i as f64 / 2000.0)
+                .collect(),
+        };
+        let mut scored: Vec<(f64, Vec<f64>)> = pts
+            .into_iter()
+            .map(|x| (ctx.objective(&[x]), vec![x]))
+            .collect();
+        if ctx.kind(ctx.active[0]).step().is_none() {
+            for r in solve_1d(ctx) {
+                scored.push((ctx.objective(&r), r));
+            }
+        }
+        scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+        return scored.into_iter().take(500).map(|(_, x)| x).collect();
+    }
+    let np = (15 * d).clamp(20, 150);
+    let budget = ctx.p.max_evals.max(np * 10);
+    let rand_point = |ctx: &Ctx<'_>, rng: &mut Rng| -> Vec<f64> {
+        (0..d)
+            .map(|k| {
+                let [lo, hi] = ctx.bounds(k);
+                rng.range(lo, hi)
+            })
+            .collect()
+    };
+    let mut pop: Vec<Vec<f64>> = (0..np).map(|_| rand_point(ctx, rng)).collect();
+    let mut base: Vec<f64> = ctx
+        .active
+        .iter()
+        .map(|&a| ctx.p.baseline[ctx.p.controllables[a]])
+        .collect();
+    ctx.clamp(&mut base);
+    pop[0] = base.clone();
+    let mut fit: Vec<f64> = pop.iter().map(|x| ctx.objective(x)).collect();
+    let mut stall = 0;
+    let mut best_prev = f64::INFINITY;
+    while ctx.evals + np < budget / 2 && stall < 60 {
+        for i in 0..np {
+            let pick = |rng: &mut Rng, avoid: &[usize]| loop {
+                let j = rng.below(np);
+                if !avoid.contains(&j) {
+                    break j;
+                }
+            };
+            let a = pick(rng, &[i]);
+            let b = pick(rng, &[i, a]);
+            let c = pick(rng, &[i, a, b]);
+            let jr = rng.below(d);
+            let mut trial = pop[i].clone();
+            for k in 0..d {
+                if k == jr || rng.uniform() < 0.9 {
+                    let [lo, hi] = ctx.bounds(k);
+                    let mut v = pop[a][k] + 0.7 * (pop[b][k] - pop[c][k]);
+                    if v < lo {
+                        v = (2.0 * lo - v).min(hi);
+                    } else if v > hi {
+                        v = (2.0 * hi - v).max(lo);
+                    }
+                    trial[k] = v;
+                }
+            }
+            let ft = ctx.objective(&trial);
+            if ft <= fit[i] {
+                pop[i] = trial;
+                fit[i] = ft;
+            }
+        }
+        let best = fit.iter().copied().fold(f64::INFINITY, f64::min);
+        stall = if best < best_prev - 1e-12 * best_prev.abs().max(1e-300) {
+            0
+        } else {
+            stall + 1
+        };
+        best_prev = best;
+    }
+    let mut order: Vec<usize> = (0..np).collect();
+    order.sort_by(|&a, &b| fit[a].total_cmp(&fit[b]));
+    let mut starts: Vec<Vec<f64>> = order.iter().take(10).map(|&i| pop[i].clone()).collect();
+    starts.push(base);
+    for _ in 0..(3 * ctx.p.n_candidates).max(10) {
+        starts.push(rand_point(ctx, rng));
+    }
+    starts.into_iter().map(|s| pattern_search(ctx, s)).collect()
+}
+
 fn std_distance(ctx: &Ctx<'_>, a: &[f64], b: &[f64]) -> f64 {
     let d = a.len().max(1) as f64;
     ((0..a.len())
@@ -322,15 +502,41 @@ pub fn optimize(p: &Problem<'_>) -> OptimizeOutput {
         .filter(|k| !active.contains(k))
         .map(|k| p.controllables[k])
         .collect();
+    // Round bounds inward to each kind's grid; an empty grid means no valid value exists.
+    let mut eff_bounds = Vec::with_capacity(p.bounds.len());
+    let mut empty = Vec::new();
+    for (a, b) in p.bounds.iter().enumerate() {
+        let kind = p.kinds.get(a).copied().unwrap_or(Kind::Continuous);
+        match kind.round_bounds(*b) {
+            Some(r) => eff_bounds.push(r),
+            None => {
+                empty.push(format!("{}:no_valid_value", p.controllables[a]));
+                eff_bounds.push(*b);
+            }
+        }
+    }
+    if !empty.is_empty() {
+        return OptimizeOutput {
+            candidates: Vec::new(),
+            reached: false,
+            closest_value: f64::NAN,
+            binding: empty,
+            unused_controllables: unused,
+            evaluations: 0,
+        };
+    }
+    let general = !p.constraints.is_empty() || p.kinds.iter().any(|k| k.step().is_some());
     let mut ctx = Ctx {
         p,
         active,
+        eff_bounds,
         evals: 0,
     };
     let mut rng = Rng::derive(p.seed, &[stream::OPTIMIZE]);
-    let raw = match ctx.active.len() {
-        0 => vec![Vec::new()],
-        1 => solve_1d(&mut ctx),
+    let raw = match (ctx.active.len(), general) {
+        (0, _) => vec![Vec::new()],
+        (_, true) => solve_general(&mut ctx, &mut rng),
+        (1, false) => solve_1d(&mut ctx),
         _ => solve_nd(&mut ctx, &mut rng),
     };
 
@@ -340,7 +546,8 @@ pub fn optimize(p: &Problem<'_>) -> OptimizeOutput {
         .filter_map(|xc| {
             let x = ctx.full(&xc);
             let y = p.expr.eval_point(&x);
-            if !y.is_finite() {
+            // Exact feasibility: constraints must hold (inputs are already on their grids).
+            if !y.is_finite() || ctx.violation(&x) > 0.0 {
                 return None;
             }
             let err = y - p.goal;
@@ -422,22 +629,37 @@ pub fn optimize(p: &Problem<'_>) -> OptimizeOutput {
         .min_by(|a, b| a.1.error.abs().total_cmp(&b.1.error.abs()))
         .map(|(_, c)| c.clone());
     let binding = match (&closest, reached) {
-        (Some(c), false) => ctx
-            .active
-            .iter()
-            .filter_map(|&a| {
-                let j = p.controllables[a];
-                let [lo, hi] = p.bounds[a];
-                let eps = 1e-6 * (hi - lo).abs().max(1e-12);
-                if (c.inputs[j] - lo).abs() <= eps {
-                    Some(format!("{j}:lower"))
-                } else if (c.inputs[j] - hi).abs() <= eps {
-                    Some(format!("{j}:upper"))
-                } else {
-                    None
+        (Some(c), false) => {
+            let mut b: Vec<String> = ctx
+                .active
+                .iter()
+                .filter_map(|&a| {
+                    let j = p.controllables[a];
+                    let [lo, hi] = ctx.eff_bounds[a];
+                    let eps = 1e-6 * (hi - lo).abs().max(1e-12);
+                    if (c.inputs[j] - lo).abs() <= eps {
+                        Some(format!("{j}:lower"))
+                    } else if (c.inputs[j] - hi).abs() <= eps {
+                        Some(format!("{j}:upper"))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (i, con) in p.constraints.iter().enumerate() {
+                let slack = (con.lhs(&c.inputs) - con.rhs).abs();
+                let s = con.rhs.abs()
+                    + con
+                        .coefs
+                        .iter()
+                        .map(|&(j, w)| (w * p.scale[j]).abs())
+                        .sum::<f64>();
+                if slack <= 1e-3 * s.max(1e-12) {
+                    b.push(format!("constraint:{i}"));
                 }
-            })
-            .collect(),
+            }
+            b
+        }
         _ => Vec::new(),
     };
     OptimizeOutput {
@@ -478,6 +700,8 @@ mod tests {
             n_candidates: 5,
             max_evals: 50_000,
             halfwidth: 0.0,
+            constraints: Vec::new(),
+            kinds: Vec::new(),
             seed: 3,
         }
     }
@@ -546,5 +770,52 @@ mod tests {
         let a = optimize(&problem(&e, &dom, vec![0, 1], 10.0));
         let b = optimize(&problem(&e, &dom, vec![0, 1], 10.0));
         assert_eq!(a, b);
+    }
+    #[test]
+    fn integer_and_step_inputs_stay_on_grid() {
+        // output = 40 * machines^0.8 * hours^0.5, machines integer, hours in steps of 0.5.
+        let names: Vec<String> = vec!["machines".into(), "hours".into()];
+        let e = parse("40 * machines ^ 0.8 * hours ^ 0.5", &names).unwrap();
+        let dom = domain(&names, &[[1.0, 20.0], [1.0, 12.0]]);
+        let mut p = problem(&e, &dom, vec![0, 1], 500.0);
+        p.kinds = vec![Kind::Integer, Kind::Step(0.5)];
+        p.y_scale = 200.0;
+        p.tolerance = 15.0;
+        let out = optimize(&p);
+        assert!(out.reached, "closest {}", out.closest_value);
+        for c in &out.candidates {
+            assert_eq!(c.inputs[0], c.inputs[0].round(), "{:?}", c.inputs);
+            assert!(
+                ((c.inputs[1] - p.bounds[1][0].ceil()) / 0.5).fract().abs() < 1e-9
+                    || (c.inputs[1] * 2.0).fract().abs() < 1e-9,
+                "{:?}",
+                c.inputs
+            );
+        }
+    }
+
+    #[test]
+    fn linear_constraint_is_respected() {
+        let names: Vec<String> = vec!["a".into(), "b".into()];
+        let e = parse("3 * a + 2 * b", &names).unwrap();
+        let dom = domain(&names, &[[0.0, 10.0], [0.0, 10.0]]);
+        let mut p = problem(&e, &dom, vec![0, 1], 25.0);
+        p.constraints = vec![spec::parse_constraint("a + b <= 9", &names).unwrap()];
+        p.y_scale = 10.0;
+        p.tolerance = 0.3;
+        let out = optimize(&p);
+        assert!(out.reached);
+        for c in &out.candidates {
+            assert!(c.inputs[0] + c.inputs[1] <= 9.0 + 1e-4, "{:?}", c.inputs);
+        }
+        // Unreachable under the constraint: 3a + 2b ≤ 27 when a + b ≤ 9 and a ≤ ~10.
+        p.goal = 40.0;
+        let out = optimize(&p);
+        assert!(!out.reached);
+        assert!(
+            out.binding.iter().any(|b| b == "constraint:0"),
+            "{:?}",
+            out.binding
+        );
     }
 }

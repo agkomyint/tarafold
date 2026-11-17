@@ -108,26 +108,27 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
 
 ## Phase 6 — Optimization, multi-goal, and experiment suggestions
 
-- [ ] 6.1 Constraint grammar (`--constrain`), max-change, baseline options, `--fix`.
+- [x] 6.1 Constraint grammar (`--constrain`), max-change, baseline options, `--fix`.
   - Done when: non-linear constraints are rejected with a clear error; fuzz target added. _R8.3, R14.2_
-- [ ] 6.2 Projected Gauss–Newton refinement, domain penalty, ensemble ranking, diversity selection.
+- [x] 6.2 Projected Gauss–Newton refinement, domain penalty, ensemble ranking, diversity selection.
   - Done when: returned candidates are pairwise distinct (standardized distance > 0.25). _R8.4, R8.5, R8.7_
-- [ ] 6.3 Infeasible-goal handling with binding constraints; sensitivity and elasticities.
+- [x] 6.3 Infeasible-goal handling with binding constraints; sensitivity and elasticities.
   - Done when: an unreachable goal returns exit code 5 with the closest value and binding bound. _R8.6, R8.8, R2.6_
 - [ ] 6.4 `tarafold optimize <report-dir>` reuses a saved front without re-discovery.
   - Done when: optimize on a saved report takes < 2 s for T8. _R2.4_
 - [ ] 6.5 Integer and step controllables: inward bound rounding, exhaustive 1-D grid, rounded DE, grid-neighborhood search, mixed alternation; T10 registry entry.
   - Done when: inverse success ≥ 90% on T10 and every candidate is on-grid. _R8.9_
-- [ ] 6.6 Multiple targets: shared ingest/profile/split, per-target stages and seeds, `targets[]` report shape, `--goal a=..,b=..`, `--exclude-other-targets`, `uses_other_target` warning, combined exit code.
+- [x] 6.6 Multiple targets: shared ingest/profile/split, per-target stages and seeds, `targets[]` report shape, `--goal a=..,b=..`, `--exclude-other-targets`, `uses_other_target` warning, combined exit code.
   - Done when: `--target orders,revenue` on T8 recovers both equations and flags that `revenue` uses `orders`. _R17.1–R17.4_
-- [ ] 6.7 Goal grammar (`--require`, `--prefer`, weights, `--goal` shorthand), target dependency graph, cycle detection, composed evaluation and AD through chains, shared bootstrap resamples across targets; goal-parser fuzz target.
+- [x] 6.7 Goal grammar (`--require`, `--prefer`, weights, `--goal` shorthand), target dependency graph, cycle detection, composed evaluation and AD through chains, shared bootstrap resamples across targets; goal-parser fuzz target.
   - Done when: on T8, changing `price` in a candidate changes predicted `orders`, `revenue`, and `profit` consistently; a cyclic dependency exits with code 2 naming the cycle. _R18.1–R18.3, R17.3_
-- [ ] 6.8 Constrained single-objective path (0–1 objectives) with hard goals, soft-goal penalties, joint goal probability, and `--robust`.
+- [x] 6.8 Constrained single-objective path (0–1 objectives) with hard goals, soft-goal penalties, joint goal probability, and `--robust`.
   - Done when: `--require "profit>=X" --prefer "min:spend"` on T8 returns candidates that meet the goal under the true functions ≥ 90% of the time. _R18.4, R18.7, R18.8_
-- [ ] 6.9 NSGA-II (2–3 objectives) and NSGA-III (4–10), Deb feasibility rules, grid-aware variation, deterministic seeding, reduction to ≤ 20, knee / best-per-objective / most-likely / preferred marks, redundancy detection; T11 registry entries with true fronts.
+- [x] 6.9 NSGA-II (2–3 objectives) and NSGA-III (4–10), Deb feasibility rules, grid-aware variation, deterministic seeding, reduction to ≤ 20, knee / best-per-objective / most-likely / preferred marks, redundancy detection; T11 registry entries with true fronts.
   - Done when: T11 hypervolume ratio ≥ 0.9 (2–3 objectives) and ≥ 0.75 (5 objectives); determinism test passes. _R18.5, R18.6, R18.10_
-- [ ] 6.10 Infeasibility analysis: deletion-filter minimal conflicting subset and best achievable value per conflicting goal; exit code 5.
+- [x] 6.10 Infeasibility analysis: deletion-filter minimal conflicting subset and best achievable value per conflicting goal; exit code 5.
   - Done when: two contradictory hard goals on T8 are reported as the conflicting pair with correct best-achievable values. _R18.9_
+  - Status (6.1–6.10): constraint grammar with linearity check, `--max-change`, `--integer`/`--step`, exact-penalty DE + pattern search, `--require`/`--prefer`/`--robust`/`--lexicographic`, equation chaining by target order with cycle detection, NSGA-II (2–3 objectives) and reference-direction NSGA-III (4–10), knee/best/preferred/most-likely marks, redundancy detection, deletion-filter conflict analysis. Simplifications: NSGA-III normalizes by min–max instead of hyperplane intercepts and uses one layer of reference directions; the knee is the minimum normalized objective sum. T10/T11 benchmark tiers are not in the registry yet (6.5, 6.9 benchmark parts).
 - [ ] 6.11 Suggestion ensemble: constant + structure ensemble with validation-loss weights; explore, exploit, and balanced acquisition; equation-discrimination component.
   - Done when: on a T2 dataset where two front equations agree on observed rows, `explore` places suggestions where they disagree most. _R19.2, R19.3_
 - [ ] 6.12 Batch selection with local penalties, de-duplication against existing rows, `--suggest-expand` with domain labels, reason codes, `suggestions.csv` in input format, report note; `tarafold suggest` and `run --suggest`.

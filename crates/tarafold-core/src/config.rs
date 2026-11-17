@@ -15,6 +15,9 @@ use crate::split::SplitStrategy;
 pub struct RunConfig {
     /// Target column(s).
     pub targets: Vec<String>,
+    /// Do not use any other target as a feature. By default a target may use targets listed
+    /// before it in `targets` (so chained equations follow the given order and cannot cycle).
+    pub exclude_other_targets: bool,
     /// Run seed. All randomness derives from it.
     pub seed: u64,
     /// Declared data source.
@@ -36,6 +39,7 @@ impl Default for RunConfig {
     fn default() -> Self {
         Self {
             targets: Vec::new(),
+            exclude_other_targets: false,
             seed: 42,
             data_source: DataSource::Observational,
             designed: Vec::new(),
@@ -183,6 +187,22 @@ pub struct OptimizeConfig {
     pub tolerance: f64,
     /// Maximum objective evaluations for multi-dimensional search.
     pub max_evals: usize,
+    /// Linear constraints, e.g. `a + b <= 5000`.
+    pub constraints: Vec<String>,
+    /// Controllables restricted to whole numbers.
+    pub integer: Vec<String>,
+    /// Controllables restricted to multiples of a step.
+    pub steps: BTreeMap<String, f64>,
+    /// Largest allowed change from baseline, as a fraction (0.2 = ±20%).
+    pub max_change: BTreeMap<String, f64>,
+    /// Hard goals (`--require`).
+    pub require: Vec<String>,
+    /// Soft goals and objectives (`--prefer`).
+    pub prefer: Vec<String>,
+    /// Minimum joint probability of meeting all hard goals.
+    pub robust: Option<f64>,
+    /// Pick the preferred trade-off lexicographically instead of by weights.
+    pub lexicographic: bool,
 }
 
 impl Default for OptimizeConfig {
@@ -195,6 +215,14 @@ impl Default for OptimizeConfig {
             n_candidates: 5,
             tolerance: 0.01,
             max_evals: 200_000,
+            constraints: Vec::new(),
+            integer: Vec::new(),
+            steps: BTreeMap::new(),
+            max_change: BTreeMap::new(),
+            require: Vec::new(),
+            prefer: Vec::new(),
+            robust: None,
+            lexicographic: false,
         }
     }
 }

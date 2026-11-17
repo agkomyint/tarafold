@@ -77,12 +77,39 @@ enum SplitArg {
 struct RunArgs {
     /// CSV file, or `-` for stdin.
     input: String,
-    /// Target column(s), comma-separated.
+    /// Target column(s), comma-separated. A target may use targets listed before it as inputs.
     #[arg(long, short, value_delimiter = ',', required = true)]
     target: Vec<String>,
-    /// Desired target value; enables optimization.
+    /// Desired target value; enables optimization. `a=1,b=2` sets exact goals on several targets.
     #[arg(long, allow_negative_numbers = true)]
-    goal: Option<f64>,
+    goal: Option<String>,
+    /// Hard goal, repeatable: `col>=v`, `col<=v`, `col=v`, `col=a..b`.
+    #[arg(long, value_name = "GOAL", allow_negative_numbers = true)]
+    require: Vec<String>,
+    /// Soft goal or objective, repeatable: `max:col[:w]`, `min:col[:w]`, or a threshold with `:w`.
+    #[arg(long, value_name = "GOAL", allow_negative_numbers = true)]
+    prefer: Vec<String>,
+    /// Keep only candidates whose joint probability of meeting all hard goals is at least this.
+    #[arg(long)]
+    robust: Option<f64>,
+    /// Pick the preferred trade-off by objective order instead of weights.
+    #[arg(long)]
+    lexicographic: bool,
+    /// Linear constraint, repeatable, e.g. `spend_a + spend_b <= 50000`.
+    #[arg(long, value_name = "EXPR", allow_negative_numbers = true)]
+    constrain: Vec<String>,
+    /// Do not use other targets as inputs for any target.
+    #[arg(long)]
+    exclude_other_targets: bool,
+    /// Whole-number controllables, comma-separated.
+    #[arg(long, value_delimiter = ',')]
+    integer: Vec<String>,
+    /// Stepped controllable, repeatable: `hours=0.5`.
+    #[arg(long, value_name = "COL=STEP")]
+    step: Vec<String>,
+    /// Largest change from baseline, repeatable: `price=20%` or `price=0.2`.
+    #[arg(long, value_name = "COL=PCT")]
+    max_change: Vec<String>,
     /// Controllable columns, comma-separated (default: all variables in the equation).
     #[arg(long, value_delimiter = ',')]
     control: Vec<String>,
@@ -283,8 +310,57 @@ fn build_config(a: &RunArgs) -> Result<RunConfig, Failure> {
     if let Some(v) = a.seed {
         cfg.seed = v;
     }
-    if let Some(g) = a.goal {
-        cfg.optimize.goal = Some(g);
+    if let Some(g) = &a.goal {
+        let g = g.trim();
+        match g.parse::<f64>() {
+            Ok(v) if v.is_finite() => cfg.optimize.goal = Some(v),
+            _ if g.contains('=') => {
+                // `a=1,b=2`: exact goals on several targets (R17.3).
+                cfg.optimize.require.extend(
+                    g.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                );
+            }
+            _ => {
+                return Err(usage(format!(
+                    "invalid --goal `{g}`: give a number or col=value pairs"
+                )));
+            }
+        }
+    }
+    if a.exclude_other_targets {
+        cfg.exclude_other_targets = true;
+    }
+    cfg.optimize.require.extend(a.require.iter().cloned());
+    cfg.optimize.prefer.extend(a.prefer.iter().cloned());
+    if let Some(r) = a.robust {
+        if !(0.0..=1.0).contains(&r) {
+            return Err(usage("--robust must be between 0 and 1"));
+        }
+        cfg.optimize.robust = Some(r);
+    }
+    if a.lexicographic {
+        cfg.optimize.lexicographic = true;
+    }
+    cfg.optimize.constraints.extend(a.constrain.iter().cloned());
+    cfg.optimize
+        .integer
+        .extend(a.integer.iter().map(|s| s.trim().to_string()));
+    for s in &a.step {
+        let (k, v) = parse_kv(s)?;
+        cfg.optimize.steps.insert(k, num(v, "--step")?);
+    }
+    for s in &a.max_change {
+        let (k, v) = parse_kv(s)?;
+        let frac = match v.strip_suffix('%') {
+            Some(p) => num(p, "--max-change")? / 100.0,
+            None => num(v, "--max-change")?,
+        };
+        if frac < 0.0 {
+            return Err(usage("--max-change must be non-negative"));
+        }
+        cfg.optimize.max_change.insert(k, frac);
     }
     if !a.control.is_empty() {
         cfg.optimize.controllables = a.control.iter().map(|c| c.trim().to_string()).collect();

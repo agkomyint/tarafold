@@ -285,6 +285,18 @@ impl Expr {
         }
     }
 
+    /// Replace every `Var(var)` with the expression `with` (equation chaining).
+    pub fn substitute(&self, var: u16, with: &Expr) -> Self {
+        let mut nodes = Vec::with_capacity(self.nodes.len() + with.nodes.len());
+        for n in &self.nodes {
+            match n {
+                Node::Var(i) if *i == var => nodes.extend_from_slice(&with.nodes),
+                other => nodes.push(*other),
+            }
+        }
+        Self { nodes }
+    }
+
     /// Rename variables: `Var(i)` becomes `Var(map[i])`.
     pub fn remap_vars(&self, map: &[u16]) -> Self {
         Self {

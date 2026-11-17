@@ -199,3 +199,127 @@ fn version_and_schema() {
     let schema: serde_json::Value = serde_json::from_slice(&s.get_output().stdout).unwrap();
     assert_eq!(schema["title"], "Report");
 }
+
+#[test]
+fn multi_goal_constraints_and_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    tarafold()
+        .args(["synth", "business-revenue", "--rows", "800", "--out"])
+        .arg(dir.path())
+        .assert()
+        .success();
+    let data = dir.path().join("data.csv");
+    let out = dir.path().join("o");
+    let chain = [
+        "--target",
+        "visitors,conversion,orders,revenue",
+        "--control",
+        "spend,price",
+    ];
+    // Threshold + two objectives through the equation chain, with a constraint and an integer.
+    tarafold()
+        .arg("run")
+        .arg(&data)
+        .args(chain)
+        .args([
+            "--require",
+            "revenue>=30000",
+            "--prefer",
+            "max:orders",
+            "--prefer",
+            "min:visitors",
+            "--constrain",
+            "spend <= 40000",
+            "--integer",
+            "spend",
+            "--stability",
+            "2",
+            "--bootstrap",
+            "30",
+            "--out",
+        ])
+        .arg(&out)
+        .assert()
+        .success();
+    let report: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join("report.json")).unwrap()).unwrap();
+    let o = &report["optimize"];
+    assert_eq!(o["method"], "NSGA-II");
+    let cands = o["candidates"].as_array().unwrap();
+    assert!(cands.len() >= 3, "{}", cands.len());
+    for c in cands {
+        let spend = c["inputs"]["spend"].as_f64().unwrap();
+        assert!(spend <= 40000.0 + 1e-6 && spend.fract() == 0.0, "{spend}");
+        assert!(c["predictions"]["revenue"].as_f64().unwrap() >= 30000.0 - 1e-3);
+    }
+    let marks: Vec<String> = cands
+        .iter()
+        .flat_map(|c| {
+            c["marks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m.as_str().unwrap().to_string())
+        })
+        .collect();
+    assert!(marks.iter().any(|m| m == "knee"), "{marks:?}");
+
+    // Impossible goals: exit 5 with a conflict report.
+    tarafold()
+        .arg("run")
+        .arg(&data)
+        .args(chain)
+        .args([
+            "--require",
+            "revenue>=1e9",
+            "--stability",
+            "0",
+            "--bootstrap",
+            "10",
+            "--out",
+        ])
+        .arg(&out)
+        .assert()
+        .code(5);
+    let report: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["optimize"]["conflict"]["goals"][0], "revenue>=1e9");
+
+    // Usage errors: non-linear constraint, goal on a non-target, too many objectives, a target as control.
+    let bad = |extra: &[&str]| {
+        tarafold()
+            .arg("run")
+            .arg(&data)
+            .args(chain)
+            .args(extra)
+            .args(["--stability", "0", "--out"])
+            .arg(&out)
+            .assert()
+            .code(2);
+    };
+    bad(&["--goal", "50000", "--constrain", "spend * price <= 5"]);
+    bad(&["--require", "profit>=5"]);
+    bad(&["--goal", "50000", "--require", "revenue>=5"]);
+    let many: Vec<String> = (0..11)
+        .flat_map(|_| ["--prefer".to_string(), "max:revenue".to_string()])
+        .collect();
+    let many_ref: Vec<&str> = many.iter().map(String::as_str).collect();
+    bad(&many_ref);
+    tarafold()
+        .arg("run")
+        .arg(&data)
+        .args([
+            "--target",
+            "orders,revenue",
+            "--control",
+            "orders,price",
+            "--require",
+            "revenue>=5",
+            "--stability",
+            "0",
+            "--out",
+        ])
+        .arg(&out)
+        .assert()
+        .code(2);
+}

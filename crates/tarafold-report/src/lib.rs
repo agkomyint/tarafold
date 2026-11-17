@@ -13,6 +13,7 @@ use tarafold_core::{DataSource, Evidence, RunConfig, SourceInfo};
 use tarafold_discover::{Strategy, StrategyRun};
 use tarafold_expr::Tree;
 use tarafold_io::{Cell, write_csv};
+use tarafold_optimize::spec::GoalSpec;
 use tarafold_profile::ColumnProfile;
 pub use tarafold_relate::{RelateReport, ScreenDecision};
 use tarafold_validate::reliability::{Bootstrap, Residuals};
@@ -225,10 +226,16 @@ pub struct Stability {
 pub struct OptimizeReport {
     /// Target.
     pub target: String,
-    /// Goal value.
+    /// Goal value for single-goal runs (`null` for multi-goal runs).
     pub goal: f64,
-    /// Absolute tolerance.
+    /// Absolute tolerance for single-goal runs.
     pub tolerance: f64,
+    /// Goals (one exact goal for `--goal`; any number for `--require`/`--prefer`).
+    #[serde(default)]
+    pub goals: Vec<GoalSpec>,
+    /// Search method used.
+    #[serde(default)]
+    pub method: String,
     /// Controllables.
     pub controllables: Vec<String>,
     /// Bounds per controllable.
@@ -249,8 +256,34 @@ pub struct OptimizeReport {
     pub evaluations: usize,
     /// Evidence level the candidates rest on.
     pub evidence: Evidence,
+    /// Goals that cannot all hold, when no feasible candidate exists.
+    #[serde(default)]
+    pub conflict: Option<ConflictReport>,
+    /// Objective pairs that move together across the trade-off set (rank correlation > 0.9).
+    #[serde(default)]
+    pub redundant_objectives: Vec<RedundantPair>,
     /// Disclaimer.
     pub disclaimer: String,
+}
+
+/// Minimal set of goals that conflict, with the best value each can reach while the others hold.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConflictReport {
+    /// Goal texts in the conflicting subset.
+    pub goals: Vec<String>,
+    /// Best achievable predicted value per conflicting goal: `(goal, value)`.
+    pub best_achievable: Vec<(String, f64)>,
+}
+
+/// Two objectives that are redundant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RedundantPair {
+    /// First goal.
+    pub a: String,
+    /// Second goal.
+    pub b: String,
+    /// Spearman rank correlation across the trade-off set.
+    pub rho: f64,
 }
 
 /// One optimization candidate.
@@ -280,6 +313,18 @@ pub struct CandidateReport {
     pub sensitivity: BTreeMap<String, f64>,
     /// Elasticity.
     pub elasticity: BTreeMap<String, f64>,
+    /// Predicted value of every goal target.
+    #[serde(default)]
+    pub predictions: BTreeMap<String, f64>,
+    /// Whether each goal is met, in goal order.
+    #[serde(default)]
+    pub goals_met: Vec<bool>,
+    /// Share of bootstrap ensemble members for which every hard goal holds.
+    #[serde(default)]
+    pub joint_probability: f64,
+    /// Labels: `best`, `knee`, `best:<goal>`, `preferred`, `most_likely`.
+    #[serde(default)]
+    pub marks: Vec<String>,
 }
 
 /// A warning.

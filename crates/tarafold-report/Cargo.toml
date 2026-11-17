@@ -16,6 +16,7 @@ tarafold-discover.workspace = true
 tarafold-validate.workspace = true
 tarafold-relate.workspace = true
 tarafold-profile.workspace = true
+tarafold-optimize.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
