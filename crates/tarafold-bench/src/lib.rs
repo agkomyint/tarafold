@@ -120,6 +120,8 @@ pub struct CaseResult {
     pub inverse_total: usize,
     /// Share of test rows inside the 90% interval.
     pub coverage_90: f64,
+    /// Reliability grade of the selected equation.
+    pub grade: String,
     /// Wall time in seconds.
     pub seconds: f64,
     /// Failure, if the pipeline errored.
@@ -153,6 +155,12 @@ pub struct Aggregate {
     pub coverage_90_noisy: f64,
     /// Median complexity ratio.
     pub median_complexity_ratio: f64,
+    /// Share graded `high` among cases with the correct structure.
+    #[serde(default)]
+    pub high_given_structure: f64,
+    /// Share graded `high` among cases with the wrong structure (should be low).
+    #[serde(default)]
+    pub high_given_wrong: f64,
     /// Total seconds.
     pub seconds: f64,
 }
@@ -212,6 +220,7 @@ fn failed(case: &Case, entry: &Entry, msg: String, seconds: f64) -> CaseResult {
         inverse_ok: 0,
         inverse_total: 0,
         coverage_90: f64::NAN,
+        grade: String::new(),
         seconds,
         error: Some(msg),
     }
@@ -251,6 +260,9 @@ pub fn run_case(case: &Case) -> CaseResult {
     };
     cfg.optimize.goal = Some(entry.example_goal);
     cfg.optimize.controllables = entry.controllables.iter().map(|s| s.to_string()).collect();
+    // Fewer stability rediscoveries than the CLI default keep the 132-case suite practical;
+    // selection and structure metrics do not depend on them.
+    cfg.validate.stability = 3;
     let (report, _) = match tarafold_engine::run(&data, &cfg) {
         Ok(r) => r,
         Err(e) => return fail(e.to_string()),
@@ -366,6 +378,7 @@ pub fn run_case(case: &Case) -> CaseResult {
         inverse_ok,
         inverse_total,
         coverage_90: t.validate.test_coverage_90,
+        grade: format!("{:?}", t.validate.reliability.grade).to_lowercase(),
         seconds,
         error: None,
     }
@@ -378,6 +391,17 @@ fn median(v: &[f64]) -> f64 {
     } else {
         stats::median(&f)
     }
+}
+
+fn share_high(results: &[&CaseResult], structure: bool) -> f64 {
+    let set: Vec<&&CaseResult> = results
+        .iter()
+        .filter(|r| r.error.is_none() && r.structure == structure)
+        .collect();
+    if set.is_empty() {
+        return f64::NAN;
+    }
+    set.iter().filter(|r| r.grade == "high").count() as f64 / set.len() as f64
 }
 
 /// Aggregate a set of results.
@@ -423,6 +447,8 @@ pub fn aggregate(results: &[&CaseResult]) -> Aggregate {
                 .map(|r| r.complexity_ratio)
                 .collect::<Vec<_>>(),
         ),
+        high_given_structure: share_high(results, true),
+        high_given_wrong: share_high(results, false),
         seconds: results.iter().map(|r| r.seconds).sum(),
     }
 }
@@ -583,10 +609,12 @@ pub fn markdown(r: &BenchReport) -> String {
     row(&mut s, "**all**", &r.aggregate);
     let _ = writeln!(
         s,
-        "\nMedian extrapolation R² {:.4}; mean 90% coverage on noisy cases {:.3}; median complexity ratio {:.2}; {:.1}s total.",
+        "\nMedian extrapolation R² {:.4}; mean 90% coverage on noisy cases {:.3}; median complexity ratio {:.2}; graded high: {:.0}% of correct structures, {:.0}% of wrong ones; {:.1}s total.",
         r.aggregate.median_extrapolation_r2,
         r.aggregate.coverage_90_noisy,
         r.aggregate.median_complexity_ratio,
+        100.0 * r.aggregate.high_given_structure,
+        100.0 * r.aggregate.high_given_wrong,
         r.aggregate.seconds
     );
     s

@@ -104,6 +104,16 @@ struct RunArgs {
     /// How the data was produced.
     #[arg(long, value_enum)]
     data_source: Option<SourceArg>,
+    /// Columns set deliberately in the experiment or simulation (default: controllables for
+    /// experimental data, all features for simulation data).
+    #[arg(long, value_delimiter = ',')]
+    designed: Vec<String>,
+    /// Bootstrap resamples for intervals (0 disables).
+    #[arg(long)]
+    bootstrap: Option<usize>,
+    /// Resampled rediscoveries for structural stability (0 disables and caps the grade).
+    #[arg(long)]
+    stability: Option<usize>,
     /// Split strategy (`ordered` for time-ordered data).
     #[arg(long, value_enum)]
     split: Option<SplitArg>,
@@ -321,6 +331,15 @@ fn build_config(a: &RunArgs) -> Result<RunConfig, Failure> {
     }
     if let Some(m) = a.max_features {
         cfg.discover.max_features = m.max(1);
+    }
+    if !a.designed.is_empty() {
+        cfg.designed = a.designed.iter().map(|s| s.trim().to_string()).collect();
+    }
+    if let Some(b) = a.bootstrap {
+        cfg.validate.bootstrap = b.min(10_000);
+    }
+    if let Some(s) = a.stability {
+        cfg.validate.stability = s.min(200);
     }
     if !a.operators.is_empty() {
         cfg.discover.gp.operators = a.operators.iter().map(|s| s.trim().to_string()).collect();

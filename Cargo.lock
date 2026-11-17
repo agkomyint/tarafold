@@ -1113,6 +1113,7 @@ dependencies = [
 name = "tarafold-engine"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "rayon",
  "tarafold-core",
  "tarafold-discover",
  "tarafold-expr",
@@ -1213,6 +1214,7 @@ dependencies = [
 name = "tarafold-validate"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "rayon",
  "schemars",
  "serde",
  "tarafold-core",

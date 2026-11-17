@@ -13,6 +13,7 @@ tarafold-core.workspace = true
 tarafold-expr.workspace = true
 serde.workspace = true
 schemars.workspace = true
+rayon.workspace = true
 
 [lints]
 workspace = true

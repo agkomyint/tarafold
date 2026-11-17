@@ -19,10 +19,15 @@ pub struct RunConfig {
     pub seed: u64,
     /// Declared data source.
     pub data_source: DataSource,
+    /// Columns set deliberately by the experimenter or simulator (R9.3). Empty means the
+    /// default: controllables for experimental data, all features for simulation data.
+    pub designed: Vec<String>,
     /// Split settings.
     pub split: SplitConfig,
     /// Discovery settings.
     pub discover: DiscoverConfig,
+    /// Reliability settings.
+    pub validate: ValidateConfig,
     /// Optimization settings; inactive when `goal` is unset.
     pub optimize: OptimizeConfig,
 }
@@ -33,8 +38,10 @@ impl Default for RunConfig {
             targets: Vec::new(),
             seed: 42,
             data_source: DataSource::Observational,
+            designed: Vec::new(),
             split: SplitConfig::default(),
             discover: DiscoverConfig::default(),
+            validate: ValidateConfig::default(),
             optimize: OptimizeConfig::default(),
         }
     }
@@ -92,6 +99,28 @@ impl Default for DiscoverConfig {
             max_front: 20,
             select: None,
             gp: GpConfig::default(),
+        }
+    }
+}
+
+/// Reliability settings (R7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ValidateConfig {
+    /// Bootstrap resamples for constant and prediction intervals (0 disables).
+    pub bootstrap: usize,
+    /// Reduced-budget rediscoveries for structural stability (0 disables; caps the grade).
+    pub stability: usize,
+    /// Share of the GP budget each stability rediscovery uses.
+    pub stability_budget: f64,
+}
+
+impl Default for ValidateConfig {
+    fn default() -> Self {
+        Self {
+            bootstrap: 200,
+            stability: 10,
+            stability_budget: 0.1,
         }
     }
 }

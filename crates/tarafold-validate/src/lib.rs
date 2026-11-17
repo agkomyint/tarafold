@@ -4,6 +4,8 @@
 //! prediction intervals, and a provisional grade. Bootstrap intervals and structural
 //! stability arrive in Phase 5; until then the grade is capped at `medium` and says why.
 
+pub mod reliability;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tarafold_core::{DataSource, Evidence, linalg, stats};
@@ -77,9 +79,8 @@ pub struct Domain {
     pub median: Vec<f64>,
     /// 99th percentile of training Mahalanobis distances.
     pub threshold: f64,
-    #[serde(skip)]
-    #[schemars(skip)]
-    chol: Vec<Vec<f64>>,
+    /// Cholesky factor of the regularized covariance of standardized features.
+    pub cholesky: Vec<Vec<f64>>,
 }
 
 /// Where a point sits relative to the domain.
@@ -136,7 +137,7 @@ impl Domain {
             mean,
             std,
             threshold: f64::INFINITY,
-            chol,
+            cholesky: chol,
         };
         let dists: Vec<f64> = (0..n)
             .map(|k| d.distance(&(0..p).map(|j| x[j][k]).collect::<Vec<_>>()))
@@ -152,7 +153,7 @@ impl Domain {
             .enumerate()
             .map(|(j, v)| (v - self.mean[j]) / self.std[j].max(1e-300))
             .collect();
-        let w = linalg::cholesky_solve(&self.chol, &zs);
+        let w = linalg::cholesky_solve(&self.cholesky, &zs);
         zs.iter()
             .zip(&w)
             .map(|(a, b)| a * b)

@@ -4,15 +4,18 @@
 use std::collections::BTreeMap;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use rayon::prelude::*;
 use tarafold_core::{DataSource, Dataset, Evidence, Rng, RunConfig, Split, rng::stream, stats};
 use tarafold_discover::{DiscoverInput, discover};
+use tarafold_expr::Expr;
 use tarafold_optimize::{Problem, optimize};
 use tarafold_report::{
     CandidateReport, ColumnSummary, DatasetInfo, DiscoverReport, EquationReport, OptimizeReport,
-    Report, RunInfo, RunStatus, SCHEMA_VERSION, SplitMetrics, StageTiming, TargetReport,
+    Report, RunInfo, RunStatus, SCHEMA_VERSION, SplitMetrics, Stability, StageTiming, TargetReport,
     ValidateReport, Warning, text,
 };
-use tarafold_validate::{Domain, Grade, GradeInputs, evidence, grade, residual_halfwidth, score};
+use tarafold_validate::reliability;
+use tarafold_validate::{Domain, Grade, GradeInputs, evidence, grade, score};
 
 /// Pipeline failures. The CLI maps these to exit codes.
 #[derive(Debug, thiserror::Error)]
@@ -68,6 +71,8 @@ struct Fitted {
     domain: Domain,
     prepared: Prepared,
     halfwidth: f64,
+    sigma: f64,
+    ensemble: Vec<Vec<f64>>,
     evidence: Evidence,
 }
 
@@ -306,20 +311,106 @@ fn fit_target(
     let sel = &out.front[out.selected];
     let sel_report = &front[out.selected];
 
-    // Validation of the selected equation.
-    let (val_pred, test_pred) = timed(stages, &format!("validate:{target}"), || {
-        (
-            score(&sel.expr, &prepared.vx, &prepared.vy).1,
-            score(&sel.expr, &prepared.sx, &prepared.sy).1,
+    // Validation of the selected equation (R7).
+    let all_names: Vec<String> = all_features
+        .iter()
+        .map(|&j| data.columns[j].name.clone())
+        .collect();
+    let rel_corr = rel.report.feature_correlation.clone();
+    let refit = |e: &Expr, x: &[Vec<f64>], y: &[f64]| tarafold_discover::refit_constants(e, x, y);
+    let (val_pred, test_pred) = (
+        score(&sel.expr, &prepared.vx, &prepared.vy).1,
+        score(&sel.expr, &prepared.sx, &prepared.sy).1,
+    );
+    let sigma = {
+        let r: Vec<f64> = val_pred
+            .iter()
+            .zip(&prepared.vy)
+            .map(|(p, y)| y - p)
+            .collect();
+        stats::std(&r)
+    };
+    // Bootstrap on train ∪ validation rows (capped at 2,000 rows), shared indices across targets.
+    let fit_x: Vec<Vec<f64>> = prepared
+        .tx
+        .iter()
+        .zip(&prepared.vx)
+        .map(|(a, b)| a.iter().chain(b).copied().take(2000).collect())
+        .collect();
+    let fit_y: Vec<f64> = prepared
+        .ty
+        .iter()
+        .chain(&prepared.vy)
+        .copied()
+        .take(2000)
+        .collect();
+    let boot = timed(stages, &format!("bootstrap:{target}"), || {
+        reliability::bootstrap(
+            &sel.expr,
+            &fit_x,
+            &fit_y,
+            cfg.validate.bootstrap,
+            cfg.seed,
+            &refit,
         )
     });
-    let halfwidth = residual_halfwidth(&val_pred, &prepared.vy, 0.9);
+    let half = reliability::interval_halfwidths(&sel.expr, &boot.ensemble, &prepared.sx, sigma);
     let covered = test_pred
         .iter()
         .zip(&prepared.sy)
-        .filter(|(p, y)| (*p - *y).abs() <= halfwidth)
+        .zip(&half)
+        .filter(|((p, y), h)| (*p - *y).abs() <= **h)
         .count();
     let coverage = covered as f64 / prepared.sy.len().max(1) as f64;
+    let halfwidth = if half.is_empty() {
+        1.645 * sigma
+    } else {
+        stats::median(&half)
+    };
+    let residuals = reliability::residuals(&test_pred, &prepared.sy, &split.test);
+
+    // Structural stability: rediscover on bootstrap resamples of the training rows with a
+    // reduced budget and count how often an equivalent equation comes back.
+    let stability = (cfg.validate.stability > 0).then(|| {
+        timed(stages, &format!("stability:{target}"), || {
+            let mut dcfg = cfg.discover.clone();
+            dcfg.gp.max_evals =
+                ((dcfg.gp.max_evals as f64) * cfg.validate.stability_budget).max(1000.0) as usize;
+            let n = disc_ty.len();
+            let check_x: Vec<Vec<f64>> = prepared.vx.clone();
+            let results: Vec<Option<String>> = (0..cfg.validate.stability)
+                .into_par_iter()
+                .map(|r| {
+                    let idx = reliability::resample_m(n, n.min(1000), 10_000 + r, cfg.seed);
+                    let bx: Vec<Vec<f64>> = disc_tx
+                        .iter()
+                        .map(|c| idx.iter().map(|&i| c[i]).collect())
+                        .collect();
+                    let by: Vec<f64> = idx.iter().map(|&i| disc_ty[i]).collect();
+                    let out = discover(&DiscoverInput {
+                        train_x: &bx,
+                        train_y: &by,
+                        val_x: &prepared.vx,
+                        val_y: &prepared.vy,
+                        config: &dcfg,
+                        seed: cfg.seed.wrapping_add(1 + r as u64),
+                    })
+                    .ok()?;
+                    let e = &out.front[out.selected].expr;
+                    reliability::equivalent(&sel.expr, e, &check_x, &refit)
+                        .then(|| e.to_infix_pretty(names, 4))
+                })
+                .collect();
+            let same = results.iter().filter(|r| r.is_some()).count();
+            Stability {
+                resamples: results.len(),
+                equivalent: same,
+                fraction: same as f64 / results.len().max(1) as f64,
+                gp_budget: dcfg.gp.max_evals,
+            }
+        })
+    });
+
     let test_r2 = sel_report.metrics.test.r2;
     let leak_used = sel_report.variables.iter().any(|v| leakage.contains(v));
     let reliability = grade(&GradeInputs {
@@ -329,13 +420,58 @@ fn fit_target(
             f64::NEG_INFINITY
         },
         best_baseline_r2: best_baseline.is_finite().then_some(best_baseline),
-        stability: None,
+        stability: stability.as_ref().map(|s| s.fraction),
         n_train: prepared.ty.len(),
         n_constants: sel.expr.constants().len(),
         leakage: leak_used,
     });
-    let designed = cfg.data_source != DataSource::Observational;
+
+    // Evidence level (R9.3, R9.4): interventional only for declared designed data where every
+    // input being interpreted (controllables, else the equation's variables) is designed.
+    let inputs: Vec<String> = if cfg.optimize.controllables.is_empty() {
+        sel_report.variables.clone()
+    } else {
+        cfg.optimize.controllables.clone()
+    };
+    let designed_set: Vec<String> = match cfg.data_source {
+        DataSource::Observational => Vec::new(),
+        _ if !cfg.designed.is_empty() => cfg.designed.clone(),
+        DataSource::Experimental => cfg.optimize.controllables.clone(),
+        DataSource::Simulation => all_names.clone(),
+    };
+    let designed = !designed_set.is_empty() && inputs.iter().all(|v| designed_set.contains(v));
     let ev = evidence(test_r2, reliability.grade, cfg.data_source, designed);
+    if cfg.data_source != DataSource::Observational {
+        if !designed {
+            warnings.push(Warning {
+                code: "inputs_not_designed".into(),
+                message: format!(
+                    "data source is {:?} but not every interpreted input is a designed column ({}); evidence stays at functional_fit or below. Use --designed.",
+                    cfg.data_source,
+                    inputs.join(", ")
+                ),
+                target: Some(target.into()),
+            });
+        }
+        for (i, a) in designed_set.iter().enumerate() {
+            for b in &designed_set[i + 1..] {
+                let (Some(ia), Some(ib)) = (
+                    all_names.iter().position(|n| n == a),
+                    all_names.iter().position(|n| n == b),
+                ) else {
+                    continue;
+                };
+                let r = rel_corr[ia][ib];
+                if r.abs() > 0.5 {
+                    warnings.push(Warning {
+                        code: "correlated_design".into(),
+                        message: format!("designed columns `{a}` and `{b}` are correlated (r = {r:.2}); the design may not vary them independently"),
+                        target: Some(target.into()),
+                    });
+                }
+            }
+        }
+    }
     if leak_used {
         warnings.push(Warning {
             code: "leakage_suspect".into(),
@@ -348,6 +484,25 @@ fn fit_target(
             code: "low_reliability".into(),
             message: format!(
                 "the selected equation for `{target}` is graded low (test R² = {test_r2:.3})"
+            ),
+            target: Some(target.into()),
+        });
+    }
+    if residuals.heteroscedastic {
+        warnings.push(Warning {
+            code: "heteroscedastic".into(),
+            message: format!("residual size changes with the prediction for `{target}`; intervals may be too narrow in parts of the range (consider --weights)"),
+            target: Some(target.into()),
+        });
+    }
+    if let Some(s) = &stability
+        && s.fraction < 0.4
+    {
+        warnings.push(Warning {
+            code: "unstable_structure".into(),
+            message: format!(
+                "only {}/{} resampled rediscoveries found an equivalent equation for `{target}`; treat its form as tentative",
+                s.equivalent, s.resamples
             ),
             target: Some(target.into()),
         });
@@ -368,14 +523,18 @@ fn fit_target(
         validate: ValidateReport {
             reliability,
             evidence: ev,
-            evidence_basis: if designed && ev == Evidence::InterventionalFit {
+            evidence_basis: if ev == Evidence::InterventionalFit {
                 "user_declared_design".into()
             } else {
                 "observational_fit".into()
             },
             interval_halfwidth_90: halfwidth,
-            interval_method: "validation_residual_quantile".into(),
+            interval_method: "bootstrap_ensemble_plus_residual_sd".into(),
             test_coverage_90: coverage,
+            residual_sd: sigma,
+            bootstrap: boot.clone(),
+            stability,
+            residuals,
             domain: domain.clone(),
         },
     };
@@ -385,10 +544,11 @@ fn fit_target(
         domain,
         prepared,
         halfwidth,
+        sigma,
+        ensemble: boot.ensemble,
         evidence: ev,
     })
 }
-
 fn run_optimize(
     f: &Fitted,
     cfg: &RunConfig,
@@ -478,7 +638,7 @@ fn run_optimize(
                 .map(|&j| (names[j].clone(), c.inputs[j]))
                 .collect(),
             predicted: c.predicted,
-            interval: c.interval,
+            interval: reliability::prediction_interval(&f.expr, &f.ensemble, &c.inputs, f.sigma),
             error: c.error,
             within_tolerance: c.within_tolerance,
             in_domain: c.domain.in_domain,
@@ -631,7 +791,9 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
         }
         .to_string(),
     ];
-    notes.push(text::STABILITY_PENDING.into());
+    if cfg.validate.stability == 0 {
+        notes.push(text::STABILITY_PENDING.into());
+    }
     let report = Report {
         schema_version: SCHEMA_VERSION.into(),
         tarafold_version: VERSION.into(),
@@ -724,6 +886,36 @@ mod tests {
         let a = strip(run(&data, &cfg).unwrap().0);
         let b = strip(run(&data, &cfg).unwrap().0);
         assert_eq!(a.to_json().unwrap(), b.to_json().unwrap());
+    }
+
+    #[test]
+    fn evidence_depends_on_declared_design() {
+        let data = load("business-revenue", 600, 0.0);
+        let base = || {
+            let mut c = RunConfig {
+                targets: vec!["revenue".into()],
+                ..Default::default()
+            };
+            c.optimize.controllables = vec!["orders".into(), "price".into()];
+            c.validate.stability = 3;
+            c
+        };
+        let ev = |cfg: &RunConfig| run(&data, cfg).unwrap().0.targets[0].validate.evidence;
+        assert_eq!(ev(&base()), Evidence::FunctionalFit);
+        let mut sim = base();
+        sim.data_source = DataSource::Simulation;
+        assert_eq!(ev(&sim), Evidence::InterventionalFit);
+        let mut exp = base();
+        exp.data_source = DataSource::Experimental;
+        exp.designed = vec!["price".into()]; // `orders` was observed, not set
+        let (report, _) = run(&data, &exp).unwrap();
+        assert_eq!(report.targets[0].validate.evidence, Evidence::FunctionalFit);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.code == "inputs_not_designed")
+        );
     }
 
     #[test]

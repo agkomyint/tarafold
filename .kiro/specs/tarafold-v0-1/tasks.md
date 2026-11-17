@@ -94,16 +94,17 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
 
 ## Phase 5 — Reliability
 
-- [ ] 5.1 Bootstrap constant CIs and ensemble prediction intervals; coverage on test.
+- [x] 5.1 Bootstrap constant CIs and ensemble prediction intervals; coverage on test.
   - Done when: coverage on 10% noise is within 0.80–0.97. _R7.3_
-- [ ] 5.2 Structural stability with reduced-budget refits.
+- [x] 5.2 Structural stability with reduced-budget refits.
   - Done when: stability ≥ 0.7 on noiseless recovered equations and lower on pure-noise targets. _R7.4_
-- [ ] 5.3 Residual diagnostics, baseline comparison, reliability grade with reasons.
+- [x] 5.3 Residual diagnostics, baseline comparison, reliability grade with reasons.
   - Done when: a pure-noise target is graded `low`. _R7.5–R7.7_
-- [ ] 5.4 Evidence levels, warnings list, text templates (observational and interventional sets), banned-causal-phrase test, optimization disclaimer.
+- [x] 5.4 Evidence levels, warnings list, text templates (observational and interventional sets), banned-causal-phrase test, optimization disclaimer.
   - Done when: the template test fails if a banned phrase is added to an observational template or a qualifier is removed from an interventional one. _R9.1, R9.2, R9.5–R9.7_
-- [ ] 5.5 `--data-source` and `--designed`: `interventional_fit` rule, `evidence_basis`, correlated-design warning.
+- [x] 5.5 `--data-source` and `--designed`: `interventional_fit` rule, `evidence_basis`, correlated-design warning.
   - Done when: the same T8 data gets `functional_fit` as observational and `interventional_fit` as simulation; a non-designed controllable caps it at `functional_fit`. _R9.3, R9.4_
+  - Result (full bench, 132 cases): 90% interval coverage 0.894 on noisy cases; `high` given to 92% of correct structures and 20% (2/10) of wrong ones (noisy cases with R² > 0.99). Stability uses 10 rediscoveries in the CLI, 3 in the bench, each on ≤ 1,000 resampled rows at 10% GP budget.
 
 ## Phase 6 — Optimization, multi-goal, and experiment suggestions
 

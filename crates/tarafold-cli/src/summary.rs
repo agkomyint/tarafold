@@ -52,6 +52,26 @@ pub fn render(r: &Report, out: &Path) -> String {
             v.reliability.grade,
             v.evidence
         );
+        if let Some(st) = &v.stability {
+            let _ = writeln!(
+                s,
+                "          stability {}/{} resamples   90% interval ±{}   coverage(test) {:.2}",
+                st.equivalent,
+                st.resamples,
+                fmt_num(v.interval_halfwidth_90),
+                v.test_coverage_90
+            );
+        }
+        let failed: Vec<&str> = v
+            .reliability
+            .checks
+            .iter()
+            .filter(|c| c.passed == Some(false))
+            .map(|c| c.condition.as_str())
+            .collect();
+        if !failed.is_empty() {
+            let _ = writeln!(s, "          not met: {}", failed.join("; "));
+        }
         let _ = writeln!(
             s,
             "Front     {} candidates (simplest → most accurate):",

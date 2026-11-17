@@ -15,6 +15,7 @@ use tarafold_expr::Tree;
 use tarafold_io::{Cell, write_csv};
 use tarafold_profile::ColumnProfile;
 pub use tarafold_relate::{RelateReport, ScreenDecision};
+use tarafold_validate::reliability::{Bootstrap, Residuals};
 use tarafold_validate::{Domain, Metrics, Reliability};
 
 /// Report schema version (SemVer, independent of the tool version).
@@ -194,8 +195,29 @@ pub struct ValidateReport {
     pub interval_method: String,
     /// Share of test rows inside the 90% interval.
     pub test_coverage_90: f64,
+    /// Standard deviation of validation residuals.
+    pub residual_sd: f64,
+    /// Bootstrap intervals for the constants.
+    pub bootstrap: Bootstrap,
+    /// Structural stability, when computed.
+    pub stability: Option<Stability>,
+    /// Residual diagnostics on test rows.
+    pub residuals: Residuals,
     /// Training-data domain.
     pub domain: Domain,
+}
+
+/// Structural stability of the selected equation (R7.4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Stability {
+    /// Resampled rediscoveries run.
+    pub resamples: usize,
+    /// Rediscoveries whose selected equation was equivalent.
+    pub equivalent: usize,
+    /// `equivalent / resamples`.
+    pub fraction: f64,
+    /// GP evaluation budget per rediscovery.
+    pub gp_budget: usize,
 }
 
 /// Optimization results.

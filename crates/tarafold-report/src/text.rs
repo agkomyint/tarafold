@@ -21,7 +21,7 @@ settings for which the fitted equation predicts a value near the goal, inside th
 Candidates outside the data domain are extrapolations.";
 
 /// Grade cap note while stability is not computed.
-pub const STABILITY_PENDING: &str = "Structural stability is not computed in this version, so the \
+pub const STABILITY_PENDING: &str = "Structural stability was not computed (--stability 0), so the \
 reliability grade is at most `medium`.";
 
 /// Phrases that must never appear in observational wording.

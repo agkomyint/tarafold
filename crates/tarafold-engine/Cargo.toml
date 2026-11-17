@@ -18,6 +18,7 @@ tarafold-report.workspace = true
 tarafold-relate.workspace = true
 tarafold-profile.workspace = true
 thiserror.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 tarafold-synth.workspace = true
