@@ -33,6 +33,8 @@ pub struct RunConfig {
     pub validate: ValidateConfig,
     /// Optimization settings; inactive when `goal` is unset.
     pub optimize: OptimizeConfig,
+    /// Next-experiment suggestions; inactive when `n` is 0.
+    pub suggest: SuggestConfig,
 }
 
 impl Default for RunConfig {
@@ -47,6 +49,7 @@ impl Default for RunConfig {
             discover: DiscoverConfig::default(),
             validate: ValidateConfig::default(),
             optimize: OptimizeConfig::default(),
+            suggest: SuggestConfig::default(),
         }
     }
 }
@@ -223,6 +226,42 @@ impl Default for OptimizeConfig {
             prefer: Vec::new(),
             robust: None,
             lexicographic: false,
+        }
+    }
+}
+
+/// How suggestions are chosen (R19.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SuggestMode {
+    /// Where the model is least certain.
+    Explore,
+    /// Where goals are most likely met or objectives improved.
+    Exploit,
+    /// Half exploit, half explore (default).
+    #[default]
+    Balanced,
+}
+
+/// Next-experiment suggestion settings (R19).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SuggestConfig {
+    /// Number of suggestions (0 disables).
+    pub n: usize,
+    /// Mode.
+    pub mode: SuggestMode,
+    /// How far beyond the observed range of each controllable suggestions may go, as a
+    /// fraction of that range (0 = stay inside).
+    pub expand: f64,
+}
+
+impl Default for SuggestConfig {
+    fn default() -> Self {
+        Self {
+            n: 0,
+            mode: SuggestMode::Balanced,
+            expand: 0.0,
         }
     }
 }

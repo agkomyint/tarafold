@@ -14,10 +14,11 @@ observations and it:
 It ships as **one binary** with no Python, Julia, or Node runtime. The CLI runs the whole
 pipeline, and an embedded visual workspace lets you explore the results.
 
-> **Status:** alpha (`v0.1.0-alpha.1`). Prebuilt binaries: see GitHub Releases. Working: `synth` → `run` (sparse regression + genetic-programming
-> search, validation, target-seeking) and `bench`. On the built-in known-equation suite
-> (66 cases) Tarafold finds the correct structure in 95% of cases. In progress: visual workspace,
-> multi-goal optimization, experiment suggestions, reliability via bootstrap and stability.
+> **Status:** alpha. Prebuilt binaries: see GitHub Releases. Working: discovery (sparse regression
+> + genetic programming), reliability (bootstrap, stability, grades), single- and multi-goal
+> optimization with constraints, next-experiment suggestions, saved-report reruns, and `bench`.
+> On the built-in known-equation suite (144 cases) Tarafold finds the correct structure in 92%
+> of cases. Not yet built: the visual workspace, local server, equation export.
 > The v0.1 spec is in [`.kiro/specs/tarafold-v0-1/`](.kiro/specs/tarafold-v0-1/).
 
 ### Try it now

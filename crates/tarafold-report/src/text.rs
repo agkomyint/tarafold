@@ -24,6 +24,11 @@ Candidates outside the data domain are extrapolations.";
 pub const STABILITY_PENDING: &str = "Structural stability was not computed (--stability 0), so the \
 reliability grade is at most `medium`.";
 
+/// Note attached to suggestions (R19.8).
+pub const SUGGEST_NOTE: &str = "Suggestions are proposals of where to measure next, chosen to reduce \
+uncertainty or to test settings that look promising. They are not predictions that a goal will be \
+reached. Run them, fill in the results, and append the rows to the data for the next run.";
+
 /// Phrases that must never appear in observational wording.
 pub const BANNED_CAUSAL_PHRASES: [&str; 6] = [
     "causes",

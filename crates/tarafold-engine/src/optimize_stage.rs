@@ -2,12 +2,17 @@
 
 use std::collections::BTreeMap;
 
+use tarafold_core::{Dataset, Split};
 use tarafold_core::{Evidence, RunConfig, stats};
 use tarafold_expr::Expr;
 use tarafold_optimize::multi::{Goal, Model, MultiProblem, Priority, optimize_goals};
 use tarafold_optimize::spec::{GoalSpec, Kind, Linear, parse_constraint, parse_goal};
+use tarafold_optimize::suggest::{Alternative, Mode, SuggestProblem, suggest};
 use tarafold_optimize::{Problem, optimize};
-use tarafold_report::{CandidateReport, ConflictReport, OptimizeReport, RedundantPair, text};
+use tarafold_report::{
+    CandidateReport, ConflictReport, OptimizeReport, RedundantPair, SuggestReport,
+    SuggestionReport, text,
+};
 use tarafold_validate::{Domain, reliability};
 
 use crate::{EngineError, Fitted};
@@ -302,6 +307,18 @@ fn compose(
     member: Option<usize>,
     stack: &mut Vec<usize>,
 ) -> Result<Expr, EngineError> {
+    compose_root(t, shared, member, None, stack)
+}
+
+/// Like [`compose`], with `root` (over the target's own features) replacing its selected
+/// equation; dependencies still use their selected equations.
+fn compose_root(
+    t: usize,
+    shared: &Shared<'_>,
+    member: Option<usize>,
+    root: Option<&Expr>,
+    stack: &mut Vec<usize>,
+) -> Result<Expr, EngineError> {
     let f = &shared.fitted[t];
     if stack.contains(&t) {
         let mut cycle: Vec<String> = stack
@@ -330,8 +347,9 @@ fn compose(
                 .unwrap_or(usize::from(u16::MAX)) as u16
         })
         .collect();
-    let base = match member {
-        Some(b) if b < f.ensemble.len() => f.expr.with_constants(&f.ensemble[b]),
+    let base = match (root, member) {
+        (Some(r), _) => r.clone(),
+        (None, Some(b)) if b < f.ensemble.len() => f.expr.with_constants(&f.ensemble[b]),
         _ => f.expr.clone(),
     };
     let mut e = base.remap_vars(&map);
@@ -585,5 +603,273 @@ pub(crate) fn multi_goal(
             })
             .collect(),
         disclaimer: disclaimer(evidence),
+    })
+}
+
+/// Composed models (point + members) for the given fitted targets.
+fn models_for(
+    shared: &Shared<'_>,
+    targets: &[usize],
+    tolerance: f64,
+) -> Result<Vec<Model>, EngineError> {
+    let n_members = shared
+        .fitted
+        .iter()
+        .map(|f| f.ensemble.len())
+        .filter(|&n| n > 0)
+        .min()
+        .unwrap_or(0);
+    targets
+        .iter()
+        .map(|&t| {
+            let f = &shared.fitted[t];
+            let y = &f.prepared.ty;
+            let range = y.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                - y.iter().copied().fold(f64::INFINITY, f64::min);
+            Ok(Model {
+                name: f.report.target.clone(),
+                expr: compose(t, shared, None, &mut Vec::new())?,
+                members: (0..n_members)
+                    .map(|b| compose(t, shared, Some(b), &mut Vec::new()))
+                    .collect::<Result<_, _>>()?,
+                scale: stats::std(y).max(1e-12),
+                tolerance: tolerance * range.abs().max(1e-12),
+            })
+        })
+        .collect()
+}
+
+/// Next-experiment suggestions (R19).
+pub(crate) fn suggest_stage(
+    shared: &Shared<'_>,
+    cfg: &RunConfig,
+    data: &Dataset,
+    split: &Split,
+    seed: u64,
+) -> Result<SuggestReport, EngineError> {
+    let oc = &cfg.optimize;
+    let sc = &cfg.suggest;
+    let mut specs: Vec<GoalSpec> = Vec::new();
+    for t in &oc.require {
+        specs.push(parse_goal(t, true).map_err(EngineError::Config)?);
+    }
+    for t in &oc.prefer {
+        specs.push(parse_goal(t, false).map_err(EngineError::Config)?);
+    }
+    if let Some(g) = oc.goal {
+        specs.push(
+            parse_goal(&format!("{}={g}", cfg.targets[0]), true).map_err(EngineError::Config)?,
+        );
+    }
+    // Models: goal targets, or every target when no goals are given.
+    let mut targets: Vec<usize> = Vec::new();
+    for s in &specs {
+        let t = shared
+            .fitted
+            .iter()
+            .position(|f| f.report.target == s.target)
+            .ok_or_else(|| {
+                EngineError::Config(format!(
+                    "goal `{}` is on `{}`, which is not a --target",
+                    s.text, s.target
+                ))
+            })?;
+        if !targets.contains(&t) {
+            targets.push(t);
+        }
+    }
+    if targets.is_empty() {
+        targets = (0..shared.fitted.len()).collect();
+    }
+    let models = models_for(shared, &targets, oc.tolerance)?;
+    let goals: Vec<Goal> = specs
+        .iter()
+        .map(|s| Goal {
+            model: models.iter().position(|m| m.name == s.target).unwrap_or(0),
+            spec: s.clone(),
+        })
+        .collect();
+
+    // Competing structures from each target's Pareto front: within 2× the selected validation
+    // loss, weighted by (L_sel / L_alt)^(n_val / 2), a likelihood ratio under Gaussian noise.
+    let mut alternatives: Vec<Vec<Alternative>> = Vec::new();
+    let mut structures: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
+    for &t in &targets {
+        let f = &shared.fitted[t];
+        let front = &f.report.discover.front;
+        let sel = f.report.discover.selected_id;
+        let n_val = front.get(sel).map_or(0, |e| e.metrics.val.n) as f64;
+        let loss = |r2: f64| (1.0 - r2).max(1e-12);
+        let l_sel = front.get(sel).map_or(1.0, |e| loss(e.metrics.val.r2));
+        let mut alts: Vec<(f64, &tarafold_report::EquationReport)> = front
+            .iter()
+            .filter(|e| {
+                e.id != sel && e.metrics.val.r2.is_finite() && loss(e.metrics.val.r2) <= 2.0 * l_sel
+            })
+            .map(|e| {
+                (
+                    (l_sel / loss(e.metrics.val.r2)).powf(n_val / 2.0).min(1.0),
+                    e,
+                )
+            })
+            .filter(|(w, _)| *w > 1e-6)
+            .collect();
+        alts.sort_by(|a, b| b.0.total_cmp(&a.0));
+        alts.truncate(5);
+        let mut list = Vec::new();
+        for (w, e) in &alts {
+            let Ok(local) = tarafold_expr::parse(&e.infix_exact, &f.prepared.names) else {
+                continue;
+            };
+            let composed = compose_root(t, shared, None, Some(&local), &mut Vec::new())?;
+            list.push(Alternative {
+                expr: composed,
+                weight: *w,
+            });
+        }
+        structures.insert(
+            f.report.target.clone(),
+            std::iter::once((
+                front.get(sel).map_or(String::new(), |e| e.infix.clone()),
+                1.0,
+            ))
+            .chain(alts.iter().map(|(w, e)| (e.infix.clone(), *w)))
+            .collect(),
+        );
+        alternatives.push(list);
+    }
+
+    let names = &shared.names;
+    let used: std::collections::BTreeSet<u16> =
+        models.iter().flat_map(|m| m.expr.variables()).collect();
+    let controllables: Vec<usize> = if oc.controllables.is_empty() {
+        used.iter()
+            .map(|&v| usize::from(v))
+            .filter(|&v| v < names.len())
+            .collect()
+    } else {
+        oc.controllables
+            .iter()
+            .map(|n| {
+                names.iter().position(|m| m == n).ok_or_else(|| {
+                    EngineError::Config(format!(
+                        "`{n}` cannot be a controllable: it is a target or not a numeric column"
+                    ))
+                })
+            })
+            .collect::<Result<_, _>>()?
+    };
+    if controllables.is_empty() {
+        return Err(EngineError::Config(
+            "no controllable features for suggestions; pass --control".into(),
+        ));
+    }
+    let space = input_space(names, &controllables, cfg, &shared.domain)?;
+    // All rows (train, validation, test) count as existing experiments.
+    let col = |n: &str| data.column(n).map(|c| c.values.clone()).unwrap_or_default();
+    let shared_cols: Vec<Vec<f64>> = names.iter().map(|n| col(n)).collect();
+    let existing: Vec<Vec<f64>> = (0..data.n_rows)
+        .map(|i| shared_cols.iter().map(|c| c[i]).collect())
+        .collect();
+    let observed_targets: Vec<Vec<f64>> = models.iter().map(|m| col(&m.name)).collect();
+    let observed: Vec<[f64; 2]> = controllables
+        .iter()
+        .map(|&j| {
+            let v = &shared_cols[j];
+            [
+                v.iter().copied().fold(f64::INFINITY, f64::min),
+                v.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            ]
+        })
+        .collect();
+    let bounds: Vec<[f64; 2]> = controllables
+        .iter()
+        .enumerate()
+        .map(|(k, &j)| {
+            let user = oc.bounds.contains_key(&names[j]);
+            let [lo, hi] = if user { space.bounds[k] } else { observed[k] };
+            let w = sc.expand.max(0.0) * (hi - lo);
+            let new_lo = if lo >= 0.0 { (lo - w).max(0.0) } else { lo - w };
+            if user { [lo, hi] } else { [new_lo, hi + w] }
+        })
+        .collect();
+    let _ = split;
+    let n = sc.n.min(100);
+    let mode = match sc.mode {
+        tarafold_core::config::SuggestMode::Explore => Mode::Explore,
+        tarafold_core::config::SuggestMode::Exploit => Mode::Exploit,
+        tarafold_core::config::SuggestMode::Balanced => Mode::Balanced,
+    };
+    let picks = suggest(&SuggestProblem {
+        models: &models,
+        alternatives: &alternatives,
+        goals: &goals,
+        controllables: controllables.clone(),
+        bounds: bounds.clone(),
+        observed,
+        kinds: space.kinds.clone(),
+        constraints: &space.constraints,
+        baseline: space.baseline.clone(),
+        scale: shared.domain.std.clone(),
+        domain: &shared.domain,
+        existing: &existing,
+        observed_targets: &observed_targets,
+        n,
+        mode,
+        evals_per_pick: 3000,
+        seed,
+    });
+    let cnames: Vec<String> = controllables.iter().map(|&j| names[j].clone()).collect();
+    let rows: Vec<BTreeMap<String, f64>> = picks
+        .iter()
+        .map(|s| {
+            names
+                .iter()
+                .cloned()
+                .zip(s.inputs.iter().copied())
+                .collect()
+        })
+        .collect();
+    let suggestions: Vec<SuggestionReport> = picks
+        .iter()
+        .enumerate()
+        .map(|(i, s)| SuggestionReport {
+            id: i + 1,
+            inputs: controllables
+                .iter()
+                .map(|&j| (names[j].clone(), s.inputs[j]))
+                .collect(),
+            row: rows[i].clone(),
+            mode: if s.exploit {
+                "exploit".into()
+            } else {
+                "explore".into()
+            },
+            reason: s.reason.code().into(),
+            acquisition: s.acquisition,
+            predictions: models
+                .iter()
+                .zip(&s.predictions)
+                .map(|(m, &v)| (m.name.clone(), v))
+                .collect(),
+            intervals: models
+                .iter()
+                .zip(&s.intervals)
+                .map(|(m, &v)| (m.name.clone(), v))
+                .collect(),
+            joint_probability: s.joint_probability,
+            in_domain: s.in_domain,
+        })
+        .collect();
+    let exploit = picks.iter().filter(|s| s.exploit).count();
+    Ok(SuggestReport {
+        mode: format!("{:?}", sc.mode).to_lowercase(),
+        exploit,
+        explore: picks.len() - exploit,
+        controllables: cnames.clone(),
+        bounds: cnames.into_iter().zip(bounds).collect(),
+        structures,
+        suggestions,
+        note: text::SUGGEST_NOTE.into(),
     })
 }

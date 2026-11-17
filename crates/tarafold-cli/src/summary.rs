@@ -213,6 +213,47 @@ pub fn render(r: &Report, out: &Path) -> String {
         }
         let _ = writeln!(s, "Note      {}", o.disclaimer);
     }
+    if let Some(sg) = &r.suggest {
+        let _ = writeln!(
+            s,
+            "Suggest   {} next experiments ({} exploit, {} explore) — written to suggestions.csv",
+            sg.suggestions.len(),
+            sg.exploit,
+            sg.explore
+        );
+        for x in &sg.suggestions {
+            let inputs: Vec<String> = sg
+                .controllables
+                .iter()
+                .map(|n| format!("{n} {}", fmt_num(x.inputs[n])))
+                .collect();
+            let preds: Vec<String> = x
+                .predictions
+                .iter()
+                .map(|(k, v)| format!("{k} ≈ {}", fmt_num(*v)))
+                .collect();
+            let p = if x.joint_probability.is_finite() {
+                format!("  P(goals) {:.2}", x.joint_probability)
+            } else {
+                String::new()
+            };
+            let _ = writeln!(
+                s,
+                "  #{:<2} {}  →  {}  [{}: {}]{p}{}",
+                x.id,
+                inputs.join("  "),
+                preds.join("  "),
+                x.mode,
+                x.reason,
+                if x.in_domain {
+                    ""
+                } else {
+                    "  outside observed range"
+                }
+            );
+        }
+        let _ = writeln!(s, "Note      {}", sg.note);
+    }
     for w in &r.warnings {
         let _ = writeln!(s, "Warning   {}", w.message);
     }

@@ -10,9 +10,9 @@ use tarafold_core::{DataSource, Dataset, Evidence, Rng, RunConfig, Split, rng::s
 use tarafold_discover::{DiscoverInput, discover};
 use tarafold_expr::Expr;
 use tarafold_report::{
-    ColumnSummary, DatasetInfo, DiscoverReport, EquationReport, Report, RunInfo, RunStatus,
-    SCHEMA_VERSION, SplitMetrics, Stability, StageTiming, TargetReport, ValidateReport, Warning,
-    text,
+    ColumnSummary, DatasetInfo, DiscoverReport, EquationReport, OptimizeReport, Report, RunInfo,
+    RunStatus, SCHEMA_VERSION, SplitMetrics, Stability, StageTiming, SuggestReport, TargetReport,
+    ValidateReport, Warning, text,
 };
 use tarafold_validate::reliability;
 use tarafold_validate::{Domain, Grade, GradeInputs, evidence, grade, score};
@@ -560,6 +560,227 @@ fn fit_target(
         evidence: ev,
     })
 }
+/// Optimization and suggestion stages shared by `run` and saved-report reruns.
+fn optimize_and_suggest(
+    data: &Dataset,
+    split: &Split,
+    fitted: &[Fitted],
+    cfg: &RunConfig,
+    stages: &mut Vec<StageTiming>,
+    warnings: &mut Vec<Warning>,
+    skip_optimize: bool,
+) -> Result<(Option<OptimizeReport>, Option<SuggestReport>), EngineError> {
+    let multi = !cfg.optimize.require.is_empty() || !cfg.optimize.prefer.is_empty();
+    let shared_names: Vec<String> = data
+        .columns
+        .iter()
+        .map(|c| c.name.clone())
+        .filter(|n| !cfg.targets.contains(n))
+        .collect();
+    let shared_cols: Vec<Vec<f64>> = data
+        .columns
+        .iter()
+        .filter(|c| !cfg.targets.contains(&c.name))
+        .map(|c| stats::gather(&c.values, &split.train))
+        .collect();
+    let shared = optimize_stage::Shared {
+        domain: Domain::fit(&shared_names, &shared_cols),
+        names: shared_names,
+        fitted,
+    };
+    let optimize = if skip_optimize {
+        None
+    } else if multi {
+        if cfg.optimize.goal.is_some() {
+            return Err(EngineError::Config(
+                "use either --goal (one exact goal) or --require/--prefer (multi-goal), not both"
+                    .into(),
+            ));
+        }
+        Some(timed(stages, "optimize", || {
+            optimize_stage::multi_goal(&shared, cfg, cfg.seed)
+        })?)
+    } else {
+        match cfg.optimize.goal {
+            None => None,
+            Some(goal) => {
+                if cfg.targets.len() > 1 {
+                    warnings.push(Warning {
+                        code: "goal_first_target".into(),
+                        message: format!(
+                            "--goal applies to the first target `{}`; use --require/--prefer for goals on several targets",
+                            cfg.targets[0]
+                        ),
+                        target: None,
+                    });
+                }
+                Some(timed(stages, "optimize", || {
+                    optimize_stage::single_goal(&fitted[0], cfg, goal, cfg.seed)
+                })?)
+            }
+        }
+    };
+    if let Some(o) = &optimize {
+        if !o.unused_controllables.is_empty() {
+            warnings.push(Warning {
+                code: "unused_controllables".into(),
+                message: format!(
+                    "the selected equation does not use {}; they were left at baseline",
+                    o.unused_controllables.join(", ")
+                ),
+                target: Some(o.target.clone()),
+            });
+        }
+        if !o.reached {
+            let message = match &o.conflict {
+                Some(k) => format!(
+                    "the goals cannot all be met; conflicting: {}",
+                    k.goals.join(", ")
+                ),
+                None if o.goal.is_finite() => format!(
+                    "no candidate reaches {} within tolerance; closest predicted value is {:.6}",
+                    o.goal, o.closest_value
+                ),
+                None => "no candidate satisfies every hard goal and constraint".into(),
+            };
+            warnings.push(Warning {
+                code: "goal_not_reached".into(),
+                message,
+                target: Some(o.target.clone()),
+            });
+        }
+        for r in &o.redundant_objectives {
+            warnings.push(Warning {
+                code: "redundant_objectives".into(),
+                message: format!(
+                    "objectives `{}` and `{}` move together (rank correlation {:.2}); consider turning one into a threshold",
+                    r.a, r.b, r.rho
+                ),
+                target: None,
+            });
+        }
+    }
+    let suggest = if cfg.suggest.n > 0 {
+        Some(timed(stages, "suggest", || {
+            optimize_stage::suggest_stage(&shared, cfg, data, split, cfg.seed)
+        })?)
+    } else {
+        None
+    };
+
+    Ok((optimize, suggest))
+}
+
+/// Rebuild the fitted state of every target from a saved report and the same data, then run
+/// optimization and/or suggestions with new settings, without re-running discovery
+/// (`tarafold optimize <report-dir>`, `tarafold suggest <report-dir>`).
+pub fn rerun_from_report(
+    saved: &Report,
+    data: &Dataset,
+    optimize: tarafold_core::config::OptimizeConfig,
+    suggest: tarafold_core::config::SuggestConfig,
+    only_suggest: bool,
+) -> Result<(Report, Outcome), EngineError> {
+    if saved.dataset.source.sha256 != data.source.sha256 {
+        return Err(EngineError::Config(format!(
+            "the data does not match the report (SHA-256 {} vs {}); pass the CSV the report was built from",
+            data.source.sha256.get(..12).unwrap_or(""),
+            saved.dataset.source.sha256.get(..12).unwrap_or("")
+        )));
+    }
+    let mut cfg = saved.run.config.clone();
+    cfg.optimize = optimize;
+    cfg.suggest = suggest;
+    let split = Split::new(
+        data.n_rows,
+        cfg.split.train,
+        cfg.split.val,
+        cfg.split.strategy,
+        cfg.seed,
+    )
+    .map_err(|e| EngineError::Config(e.to_string()))?;
+    let ti = |name: &str| {
+        data.index_of(name)
+            .map_err(|_| EngineError::Data(format!("column `{name}` is missing")))
+    };
+    let mut fitted = Vec::new();
+    for t in &saved.targets {
+        let names = t.features.clone();
+        let cols = |rows: &[u32]| -> Result<Vec<Vec<f64>>, EngineError> {
+            names
+                .iter()
+                .map(|n| Ok(stats::gather(&data.columns[ti(n)?].values, rows)))
+                .collect()
+        };
+        let y = &data.columns[ti(&t.target)?].values;
+        let sel = t
+            .discover
+            .front
+            .get(t.discover.selected_id)
+            .ok_or_else(|| EngineError::Data("saved report has no selected equation".into()))?;
+        let expr = tarafold_expr::parse(&sel.infix_exact, &names).map_err(|e| {
+            EngineError::Data(format!(
+                "cannot read the saved equation for `{}`: {e}",
+                t.target
+            ))
+        })?;
+        let v = &t.validate;
+        fitted.push(Fitted {
+            report: t.clone(),
+            expr,
+            domain: v.domain.clone(),
+            prepared: Prepared {
+                tx: cols(&split.train)?,
+                vx: cols(&split.val)?,
+                sx: cols(&split.test)?,
+                ty: stats::gather(y, &split.train),
+                vy: stats::gather(y, &split.val),
+                sy: stats::gather(y, &split.test),
+                names,
+            },
+            halfwidth: v.interval_halfwidth_90,
+            sigma: v.residual_sd,
+            ensemble: v.bootstrap.ensemble.clone(),
+            evidence: v.evidence,
+        });
+    }
+    let mut stages = Vec::new();
+    let mut warnings = Vec::new();
+    let (opt, sug) = optimize_and_suggest(
+        data,
+        &split,
+        &fitted,
+        &cfg,
+        &mut stages,
+        &mut warnings,
+        only_suggest,
+    )?;
+    let mut report = saved.clone();
+    report.run.config = cfg;
+    report.run.stages.extend(stages);
+    report.warnings.retain(|w| {
+        !matches!(
+            w.code.as_str(),
+            "goal_not_reached"
+                | "unused_controllables"
+                | "redundant_objectives"
+                | "goal_first_target"
+        )
+    });
+    report.warnings.extend(warnings);
+    if !only_suggest {
+        report.optimize = opt;
+    }
+    report.suggest = sug;
+    let outcome = Outcome {
+        low_grade: fitted
+            .iter()
+            .any(|f| f.report.validate.reliability.grade == Grade::Low),
+        goal_missed: report.optimize.as_ref().is_some_and(|o| !o.reached),
+    };
+    Ok((report, outcome))
+}
+
 /// Run the pipeline on a loaded dataset.
 pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineError> {
     if cfg.targets.is_empty() {
@@ -612,94 +833,16 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
         )?);
     }
 
-    let multi = !cfg.optimize.require.is_empty() || !cfg.optimize.prefer.is_empty();
-    let optimize = if multi {
-        if cfg.optimize.goal.is_some() {
-            return Err(EngineError::Config(
-                "use either --goal (one exact goal) or --require/--prefer (multi-goal), not both"
-                    .into(),
-            ));
-        }
-        let shared_names: Vec<String> = data
-            .columns
-            .iter()
-            .map(|c| c.name.clone())
-            .filter(|n| !cfg.targets.contains(n))
-            .collect();
-        let shared_cols: Vec<Vec<f64>> = data
-            .columns
-            .iter()
-            .filter(|c| !cfg.targets.contains(&c.name))
-            .map(|c| stats::gather(&c.values, &split.train))
-            .collect();
-        let shared = optimize_stage::Shared {
-            domain: Domain::fit(&shared_names, &shared_cols),
-            names: shared_names,
-            fitted: &fitted,
-        };
-        Some(timed(&mut stages, "optimize", || {
-            optimize_stage::multi_goal(&shared, cfg, cfg.seed)
-        })?)
-    } else {
-        match cfg.optimize.goal {
-            None => None,
-            Some(goal) => {
-                if cfg.targets.len() > 1 {
-                    warnings.push(Warning {
-                        code: "goal_first_target".into(),
-                        message: format!(
-                            "--goal applies to the first target `{}`; use --require/--prefer for goals on several targets",
-                            cfg.targets[0]
-                        ),
-                        target: None,
-                    });
-                }
-                Some(timed(&mut stages, "optimize", || {
-                    optimize_stage::single_goal(&fitted[0], cfg, goal, cfg.seed)
-                })?)
-            }
-        }
-    };
-    if let Some(o) = &optimize {
-        if !o.unused_controllables.is_empty() {
-            warnings.push(Warning {
-                code: "unused_controllables".into(),
-                message: format!(
-                    "the selected equation does not use {}; they were left at baseline",
-                    o.unused_controllables.join(", ")
-                ),
-                target: Some(o.target.clone()),
-            });
-        }
-        if !o.reached {
-            let message = match &o.conflict {
-                Some(k) => format!(
-                    "the goals cannot all be met; conflicting: {}",
-                    k.goals.join(", ")
-                ),
-                None if o.goal.is_finite() => format!(
-                    "no candidate reaches {} within tolerance; closest predicted value is {:.6}",
-                    o.goal, o.closest_value
-                ),
-                None => "no candidate satisfies every hard goal and constraint".into(),
-            };
-            warnings.push(Warning {
-                code: "goal_not_reached".into(),
-                message,
-                target: Some(o.target.clone()),
-            });
-        }
-        for r in &o.redundant_objectives {
-            warnings.push(Warning {
-                code: "redundant_objectives".into(),
-                message: format!(
-                    "objectives `{}` and `{}` move together (rank correlation {:.2}); consider turning one into a threshold",
-                    r.a, r.b, r.rho
-                ),
-                target: None,
-            });
-        }
-    }
+    let (optimize, suggest) = optimize_and_suggest(
+        data,
+        &split,
+        &fitted,
+        cfg,
+        &mut stages,
+        &mut warnings,
+        false,
+    )?;
+
     let outcome = Outcome {
         low_grade: fitted
             .iter()
@@ -745,6 +888,7 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
         },
         targets: fitted.into_iter().map(|f| f.report).collect(),
         optimize,
+        suggest,
         warnings,
         notes,
     };

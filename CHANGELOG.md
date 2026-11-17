@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Reliability: bootstrap confidence intervals for constants and ensemble prediction intervals,
+  structural stability by resampled rediscovery, residual diagnostics; grades can reach `high`.
+- `--data-source experimental|simulation` and `--designed` for the `interventional_fit` level.
+- Optimization: `--constrain` (linear), `--max-change`, `--integer`, `--step`.
+- Multi-goal optimization: `--require`, `--prefer max:x[:w]`, `--robust`, `--lexicographic`,
+  chained target equations, NSGA-II / NSGA-III trade-off sets with knee, best, preferred and
+  most-likely marks, conflict reports, redundant-objective detection.
+- `--suggest N` and `tarafold suggest <report-dir>`: next experiments (explore / exploit /
+  balanced) written to `suggestions.csv` in the input's column layout.
+- `tarafold optimize <report-dir>`: new goals on a saved report without rediscovery.
+- `--operators`, cleaner simplifier, exact gradients for constant fitting, shared golden
+  evaluator vectors, schema validation of `report.json`.
+- Benchmark: two seeds per case (144 cases incl. new T10 discrete-input tier) and
+  `--suite active` (closed-loop experiment selection).
 ## [0.1.0-alpha.1] - 2026-11-17
 
 First preview. Phases 1–4 of the v0.1 spec; the visual workspace, multi-goal optimization,

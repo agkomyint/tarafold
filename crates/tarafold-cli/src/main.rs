@@ -9,6 +9,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, anyhow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use tarafold_core::config::{OptimizeConfig, SuggestConfig, SuggestMode};
 use tarafold_core::{DataSource, RunConfig, SplitStrategy};
 use tarafold_engine::EngineError;
 use tarafold_io::{IngestOptions, IoError, read_csv};
@@ -37,6 +38,10 @@ enum Command {
     Run(Box<RunArgs>),
     /// Generate a synthetic dataset from a known equation.
     Synth(SynthArgs),
+    /// Re-run optimization on a saved report with new goals, without re-running discovery.
+    Optimize(Box<OptimizeArgs>),
+    /// Suggest next experiments from a saved report, without re-running discovery.
+    Suggest(Box<SuggestArgs>),
     /// Run the known-equation benchmark and score discovery against the truth.
     Bench(BenchArgs),
     /// Profile every numeric column: statistics, histograms, outliers, flags.
@@ -73,13 +78,9 @@ enum SplitArg {
     Ordered,
 }
 
+/// Goal, input, and constraint flags shared by `run`, `optimize`, and `suggest`.
 #[derive(Args)]
-struct RunArgs {
-    /// CSV file, or `-` for stdin.
-    input: String,
-    /// Target column(s), comma-separated. A target may use targets listed before it as inputs.
-    #[arg(long, short, value_delimiter = ',', required = true)]
-    target: Vec<String>,
+struct GoalArgs {
     /// Desired target value; enables optimization. `a=1,b=2` sets exact goals on several targets.
     #[arg(long, allow_negative_numbers = true)]
     goal: Option<String>,
@@ -98,9 +99,6 @@ struct RunArgs {
     /// Linear constraint, repeatable, e.g. `spend_a + spend_b <= 50000`.
     #[arg(long, value_name = "EXPR", allow_negative_numbers = true)]
     constrain: Vec<String>,
-    /// Do not use other targets as inputs for any target.
-    #[arg(long)]
-    exclude_other_targets: bool,
     /// Whole-number controllables, comma-separated.
     #[arg(long, value_delimiter = ',')]
     integer: Vec<String>,
@@ -125,6 +123,81 @@ struct RunArgs {
     /// Goal tolerance as a fraction of the target's observed range.
     #[arg(long)]
     tolerance: Option<f64>,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ModeArg {
+    Explore,
+    Exploit,
+    Balanced,
+}
+
+/// `tarafold optimize <report-dir>`.
+#[derive(Args)]
+struct OptimizeArgs {
+    /// Directory with report.json from an earlier `tarafold run`.
+    report_dir: PathBuf,
+    #[command(flatten)]
+    g: GoalArgs,
+    /// The CSV the report was built from (default: the path recorded in the report).
+    #[arg(long)]
+    data: Option<String>,
+    /// Output directory (default: the report directory).
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// Output format on stdout.
+    #[arg(long, value_enum, default_value = "human")]
+    format: Format,
+}
+
+/// `tarafold suggest <report-dir>`.
+#[derive(Args)]
+struct SuggestArgs {
+    /// Directory with report.json from an earlier `tarafold run`.
+    report_dir: PathBuf,
+    /// Number of suggestions.
+    #[arg(short, long, default_value_t = 8)]
+    n: usize,
+    /// How suggestions are chosen.
+    #[arg(long, value_enum, default_value = "balanced")]
+    mode: ModeArg,
+    /// Allow suggestions this far beyond the observed range (e.g. `10%`).
+    #[arg(long)]
+    expand: Option<String>,
+    #[command(flatten)]
+    g: GoalArgs,
+    /// The CSV the report was built from (default: the path recorded in the report).
+    #[arg(long)]
+    data: Option<String>,
+    /// Output directory (default: the report directory).
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// Output format on stdout.
+    #[arg(long, value_enum, default_value = "human")]
+    format: Format,
+}
+
+#[derive(Args)]
+struct RunArgs {
+    /// CSV file, or `-` for stdin.
+    input: String,
+    /// Target column(s), comma-separated. A target may use targets listed before it as inputs.
+    #[arg(long, short, value_delimiter = ',', required = true)]
+    target: Vec<String>,
+    #[command(flatten)]
+    g: GoalArgs,
+    /// Do not use other targets as inputs for any target.
+    #[arg(long)]
+    exclude_other_targets: bool,
+    /// Suggest this many next experiments (writes suggestions.csv).
+    #[arg(long, value_name = "N")]
+    suggest: Option<usize>,
+    /// How suggestions are chosen.
+    #[arg(long, value_enum)]
+    suggest_mode: Option<ModeArg>,
+    /// Allow suggestions this far beyond the observed range (e.g. `10%` or `0.1`).
+    #[arg(long)]
+    suggest_expand: Option<String>,
     /// Row-weight column.
     #[arg(long)]
     weights: Option<String>,
@@ -202,6 +275,8 @@ struct RelateArgs {
 enum SuiteArg {
     Smoke,
     Full,
+    /// Closed-loop experiment selection (suggest vs random vs Latin hypercube).
+    Active,
 }
 
 #[derive(Args)]
@@ -292,6 +367,106 @@ fn num(s: &str, what: &str) -> Result<f64, Failure> {
         .ok_or_else(|| usage(format!("invalid number `{s}` in {what}")))
 }
 
+/// Apply goal, input, and constraint flags to the optimization settings.
+fn apply_goals(a: &GoalArgs, opt: &mut OptimizeConfig) -> Result<(), Failure> {
+    if let Some(g) = &a.goal {
+        let g = g.trim();
+        match g.parse::<f64>() {
+            Ok(v) if v.is_finite() => opt.goal = Some(v),
+            _ if g.contains('=') => {
+                // `a=1,b=2`: exact goals on several targets (R17.3).
+                opt.require.extend(
+                    g.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                );
+            }
+            _ => {
+                return Err(usage(format!(
+                    "invalid --goal `{g}`: give a number or col=value pairs"
+                )));
+            }
+        }
+    }
+    opt.require.extend(a.require.iter().cloned());
+    opt.prefer.extend(a.prefer.iter().cloned());
+    if let Some(r) = a.robust {
+        if !(0.0..=1.0).contains(&r) {
+            return Err(usage("--robust must be between 0 and 1"));
+        }
+        opt.robust = Some(r);
+    }
+    if a.lexicographic {
+        opt.lexicographic = true;
+    }
+    opt.constraints.extend(a.constrain.iter().cloned());
+    opt.integer
+        .extend(a.integer.iter().map(|s| s.trim().to_string()));
+    for s in &a.step {
+        let (k, v) = parse_kv(s)?;
+        opt.steps.insert(k, num(v, "--step")?);
+    }
+    for s in &a.max_change {
+        let (k, v) = parse_kv(s)?;
+        let frac = match v.strip_suffix('%') {
+            Some(p) => num(p, "--max-change")? / 100.0,
+            None => num(v, "--max-change")?,
+        };
+        if frac < 0.0 {
+            return Err(usage("--max-change must be non-negative"));
+        }
+        opt.max_change.insert(k, frac);
+    }
+    if !a.control.is_empty() {
+        opt.controllables = a.control.iter().map(|c| c.trim().to_string()).collect();
+    }
+    for b in &a.bounds {
+        let (k, v) = parse_kv(b)?;
+        let (lo, hi) = v
+            .split_once("..")
+            .ok_or_else(|| usage(format!("expected COL=LO..HI, got `{b}`")))?;
+        let (lo, hi) = (num(lo, "--bounds")?, num(hi, "--bounds")?);
+        if lo > hi {
+            return Err(usage(format!("lower bound exceeds upper bound in `{b}`")));
+        }
+        opt.bounds.insert(k, [lo, hi]);
+    }
+    for f in &a.fix {
+        let (k, v) = parse_kv(f)?;
+        opt.fixed.insert(k, num(v, "--fix")?);
+    }
+    if let Some(n) = a.candidates {
+        opt.n_candidates = n.clamp(1, 50);
+    }
+    if let Some(t) = a.tolerance {
+        if !(t > 0.0 && t < 1.0) {
+            return Err(usage("--tolerance must be between 0 and 1"));
+        }
+        opt.tolerance = t;
+    }
+    Ok(())
+}
+
+fn parse_fraction(s: &str, what: &str) -> Result<f64, Failure> {
+    let s = s.trim();
+    let v = match s.strip_suffix('%') {
+        Some(p) => num(p, what)? / 100.0,
+        None => num(s, what)?,
+    };
+    if v < 0.0 {
+        return Err(usage(format!("{what} must be non-negative")));
+    }
+    Ok(v)
+}
+
+fn mode_of(m: ModeArg) -> SuggestMode {
+    match m {
+        ModeArg::Explore => SuggestMode::Explore,
+        ModeArg::Exploit => SuggestMode::Exploit,
+        ModeArg::Balanced => SuggestMode::Balanced,
+    }
+}
+
 fn build_config(a: &RunArgs) -> Result<RunConfig, Failure> {
     let mut cfg = match &a.config {
         Some(p) => {
@@ -310,84 +485,18 @@ fn build_config(a: &RunArgs) -> Result<RunConfig, Failure> {
     if let Some(v) = a.seed {
         cfg.seed = v;
     }
-    if let Some(g) = &a.goal {
-        let g = g.trim();
-        match g.parse::<f64>() {
-            Ok(v) if v.is_finite() => cfg.optimize.goal = Some(v),
-            _ if g.contains('=') => {
-                // `a=1,b=2`: exact goals on several targets (R17.3).
-                cfg.optimize.require.extend(
-                    g.split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty()),
-                );
-            }
-            _ => {
-                return Err(usage(format!(
-                    "invalid --goal `{g}`: give a number or col=value pairs"
-                )));
-            }
-        }
-    }
     if a.exclude_other_targets {
         cfg.exclude_other_targets = true;
     }
-    cfg.optimize.require.extend(a.require.iter().cloned());
-    cfg.optimize.prefer.extend(a.prefer.iter().cloned());
-    if let Some(r) = a.robust {
-        if !(0.0..=1.0).contains(&r) {
-            return Err(usage("--robust must be between 0 and 1"));
-        }
-        cfg.optimize.robust = Some(r);
+    apply_goals(&a.g, &mut cfg.optimize)?;
+    if let Some(n) = a.suggest {
+        cfg.suggest.n = n.min(100);
     }
-    if a.lexicographic {
-        cfg.optimize.lexicographic = true;
+    if let Some(m) = a.suggest_mode {
+        cfg.suggest.mode = mode_of(m);
     }
-    cfg.optimize.constraints.extend(a.constrain.iter().cloned());
-    cfg.optimize
-        .integer
-        .extend(a.integer.iter().map(|s| s.trim().to_string()));
-    for s in &a.step {
-        let (k, v) = parse_kv(s)?;
-        cfg.optimize.steps.insert(k, num(v, "--step")?);
-    }
-    for s in &a.max_change {
-        let (k, v) = parse_kv(s)?;
-        let frac = match v.strip_suffix('%') {
-            Some(p) => num(p, "--max-change")? / 100.0,
-            None => num(v, "--max-change")?,
-        };
-        if frac < 0.0 {
-            return Err(usage("--max-change must be non-negative"));
-        }
-        cfg.optimize.max_change.insert(k, frac);
-    }
-    if !a.control.is_empty() {
-        cfg.optimize.controllables = a.control.iter().map(|c| c.trim().to_string()).collect();
-    }
-    for b in &a.bounds {
-        let (k, v) = parse_kv(b)?;
-        let (lo, hi) = v
-            .split_once("..")
-            .ok_or_else(|| usage(format!("expected COL=LO..HI, got `{b}`")))?;
-        let (lo, hi) = (num(lo, "--bounds")?, num(hi, "--bounds")?);
-        if lo > hi {
-            return Err(usage(format!("lower bound exceeds upper bound in `{b}`")));
-        }
-        cfg.optimize.bounds.insert(k, [lo, hi]);
-    }
-    for f in &a.fix {
-        let (k, v) = parse_kv(f)?;
-        cfg.optimize.fixed.insert(k, num(v, "--fix")?);
-    }
-    if let Some(n) = a.candidates {
-        cfg.optimize.n_candidates = n.clamp(1, 50);
-    }
-    if let Some(t) = a.tolerance {
-        if !(t > 0.0 && t < 1.0) {
-            return Err(usage("--tolerance must be between 0 and 1"));
-        }
-        cfg.optimize.tolerance = t;
+    if let Some(x) = &a.suggest_expand {
+        cfg.suggest.expand = parse_fraction(x, "--suggest-expand")?;
     }
     if let Some(s) = a.data_source {
         cfg.data_source = match s {
@@ -467,6 +576,7 @@ fn cmd_run(a: &RunArgs) -> Result<u8, Failure> {
     let toml_text =
         toml::to_string_pretty(&cfg).map_err(|e| anyhow!("serializing run.toml: {e}"))?;
     write(&a.out, "run.toml", &toml_text)?;
+    write_suggestions(&a.out, &report, &data)?;
 
     match a.format {
         Format::Json => println!("{json}"),
@@ -485,6 +595,28 @@ fn cmd_bench(a: &BenchArgs) -> Result<u8, Failure> {
     let suite = match a.suite {
         SuiteArg::Smoke => tarafold_bench::Suite::Smoke,
         SuiteArg::Full => tarafold_bench::Suite::Full,
+        SuiteArg::Active => {
+            let tty = std::io::stderr().is_terminal();
+            let r = tarafold_bench::active::run_active(&[1, 2], |l| {
+                if tty {
+                    eprintln!(
+                        "{} {:?} seed {}: goal after {:?}, recovery after {:?}",
+                        l.dataset,
+                        l.method,
+                        l.seed,
+                        l.experiments_to_goal,
+                        l.experiments_to_recovery
+                    );
+                }
+            });
+            fs::create_dir_all(&a.out).with_context(|| format!("creating {}", a.out.display()))?;
+            let json = serde_json::to_string_pretty(&r).map_err(|e| anyhow!(e.to_string()))?;
+            write(&a.out, "active.json", &json)?;
+            let md = tarafold_bench::active::markdown(&r);
+            write(&a.out, "active.md", &md)?;
+            print!("{md}");
+            return Ok(0);
+        }
     };
     let tty = std::io::stderr().is_terminal();
     let report = tarafold_bench::run(suite, |i, n, r| {
@@ -696,6 +828,88 @@ fn cmd_relate(a: &RelateArgs) -> Result<u8, Failure> {
     Ok(0)
 }
 
+/// Columns for suggestions.csv: the dataset's numeric columns, then excluded columns (empty).
+fn write_suggestions(
+    dir: &Path,
+    report: &tarafold_report::Report,
+    data: &tarafold_core::Dataset,
+) -> Result<(), Failure> {
+    let Some(s) = &report.suggest else {
+        return Ok(());
+    };
+    let mut columns = data.names();
+    columns.extend(data.source.excluded.iter().map(|e| e.name.clone()));
+    let rows: Vec<std::collections::BTreeMap<String, f64>> =
+        s.suggestions.iter().map(|x| x.row.clone()).collect();
+    write(
+        dir,
+        "suggestions.csv",
+        &report.suggestions_csv(&columns, &rows)?,
+    )
+}
+
+/// `tarafold optimize|suggest <report-dir>`: reload the report and data, apply new goals, rerun
+/// optimization and/or suggestions.
+fn cmd_saved(
+    report_dir: &Path,
+    g: &GoalArgs,
+    data_path: Option<&str>,
+    out: Option<&Path>,
+    format: Format,
+    suggest: Option<SuggestConfig>,
+) -> Result<u8, Failure> {
+    let rp = report_dir.join("report.json");
+    let text = fs::read_to_string(&rp).with_context(|| format!("reading {}", rp.display()))?;
+    let saved = tarafold_report::Report::from_json(&text)
+        .map_err(|e| usage(format!("{} is not a Tarafold report: {e}", rp.display())))?;
+    if saved.dataset.weighted {
+        return Err(usage(
+            "this report used row weights; re-run `tarafold run` with --weights instead",
+        ));
+    }
+    let path = data_path
+        .map(str::to_string)
+        .unwrap_or_else(|| saved.dataset.source.path.clone());
+    let opts = IngestOptions {
+        required: saved.run.config.targets.clone(),
+        ..Default::default()
+    };
+    let data = load(&path, &opts)?;
+    let mut opt = OptimizeConfig::default();
+    apply_goals(g, &mut opt)?;
+    let wants_opt = opt.goal.is_some() || !opt.require.is_empty() || !opt.prefer.is_empty();
+    if suggest.is_none() && !wants_opt {
+        return Err(usage("give a goal: --goal, --require, or --prefer"));
+    }
+    // `suggest` uses the goals to aim suggestions but does not run the optimizer.
+    let only_suggest = suggest.is_some();
+    let sug = suggest.unwrap_or_default();
+    let (report, outcome) =
+        tarafold_engine::rerun_from_report(&saved, &data, opt, sug, only_suggest)?;
+    let out = out.unwrap_or(report_dir);
+    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+    let json = report.to_json()?;
+    write(out, "report.json", &json)?;
+    write(out, "candidates.csv", &report.candidates_csv()?)?;
+    write_suggestions(out, &report, &data)?;
+    match format {
+        Format::Json => println!("{json}"),
+        Format::Human => {
+            // `suggest` keeps earlier optimization results in report.json but only shows suggestions.
+            let mut shown = report.clone();
+            if only_suggest {
+                shown.optimize = None;
+            }
+            print!("{}", summary::render(&shown, out));
+        }
+    }
+    Ok(if outcome.goal_missed && !only_suggest {
+        5
+    } else {
+        0
+    })
+}
+
 fn cmd_synth(a: &SynthArgs) -> Result<u8, Failure> {
     if a.list {
         for e in tarafold_synth::registry() {
@@ -738,6 +952,35 @@ fn main() -> ExitCode {
         Command::Run(a) => cmd_run(a),
         Command::Synth(a) => cmd_synth(a),
         Command::Bench(a) => cmd_bench(a),
+        Command::Optimize(a) => cmd_saved(
+            &a.report_dir,
+            &a.g,
+            a.data.as_deref(),
+            a.out.as_deref(),
+            a.format,
+            None,
+        ),
+        Command::Suggest(a) => {
+            let expand = match &a.expand {
+                Some(x) => parse_fraction(x, "--expand"),
+                None => Ok(0.0),
+            };
+            match expand {
+                Ok(expand) => cmd_saved(
+                    &a.report_dir,
+                    &a.g,
+                    a.data.as_deref(),
+                    a.out.as_deref(),
+                    a.format,
+                    Some(SuggestConfig {
+                        n: a.n.clamp(1, 100),
+                        mode: mode_of(a.mode),
+                        expand,
+                    }),
+                ),
+                Err(e) => Err(e),
+            }
+        }
         Command::Profile(a) => cmd_profile(a),
         Command::Relate(a) => cmd_relate(a),
         Command::Schema => tarafold_report::schema_json()

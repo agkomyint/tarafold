@@ -323,3 +323,99 @@ fn multi_goal_constraints_and_errors() {
         .assert()
         .code(2);
 }
+
+#[test]
+fn suggest_and_saved_report_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    tarafold()
+        .args([
+            "synth",
+            "cobb-douglas",
+            "--rows",
+            "300",
+            "--noise",
+            "0.05",
+            "--out",
+        ])
+        .arg(dir.path())
+        .assert()
+        .success();
+    let data = dir.path().join("data.csv");
+    let out = dir.path().join("o");
+    tarafold()
+        .arg("run")
+        .arg(&data)
+        .args([
+            "--target",
+            "output",
+            "--control",
+            "capital,labor",
+            "--suggest",
+            "4",
+            "--stability",
+            "2",
+            "--out",
+        ])
+        .arg(&out)
+        .assert()
+        .success();
+    // suggestions.csv has the input's columns, controllables filled, target empty.
+    let sug = fs::read_to_string(out.join("suggestions.csv")).unwrap();
+    let mut lines = sug.lines();
+    assert_eq!(lines.next(), Some("capital,labor,output"));
+    let rows: Vec<&str> = lines.collect();
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().all(|r| r.ends_with(',')), "{rows:?}");
+
+    // Fill in results with the true equation and append: the next run must work unchanged.
+    let mut csv = fs::read_to_string(&data).unwrap();
+    for r in &rows {
+        let v: Vec<f64> = r
+            .trim_end_matches(',')
+            .split(',')
+            .map(|x| x.parse().unwrap())
+            .collect();
+        let y = 2.5 * v[0].powf(0.7) * v[1].powf(0.3);
+        csv.push_str(&format!("{},{},{}\n", v[0], v[1], y));
+    }
+    let data2 = dir.path().join("data2.csv");
+    fs::write(&data2, csv).unwrap();
+    tarafold()
+        .arg("run")
+        .arg(&data2)
+        .args(["--target", "output", "--stability", "0", "--out"])
+        .arg(dir.path().join("o2"))
+        .assert()
+        .success();
+
+    // Saved-report optimization: no rediscovery, same equation.
+    let a = tarafold()
+        .arg("optimize")
+        .arg(&out)
+        .args(["--goal", "80", "--control", "capital,labor", "--out"])
+        .arg(dir.path().join("o3"))
+        .assert()
+        .success();
+    assert!(String::from_utf8_lossy(&a.get_output().stdout).contains("Goal      output = 80"));
+    let report: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.path().join("o3").join("report.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["optimize"]["reached"], true);
+    // Saved-report suggestions (explore) and a data mismatch error.
+    tarafold()
+        .arg("suggest")
+        .arg(&out)
+        .args(["-n", "2", "--mode", "explore", "--out"])
+        .arg(dir.path().join("o4"))
+        .assert()
+        .success();
+    assert!(dir.path().join("o4").join("suggestions.csv").exists());
+    tarafold()
+        .arg("optimize")
+        .arg(&out)
+        .args(["--goal", "80", "--data"])
+        .arg(&data2)
+        .assert()
+        .code(2);
+}

@@ -7,6 +7,7 @@
 
 pub mod multi;
 pub mod spec;
+pub mod suggest;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

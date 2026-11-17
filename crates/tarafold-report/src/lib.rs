@@ -3,6 +3,7 @@
 //! The JSON Schema printed by `tarafold schema` is generated from these types, so the
 //! schema and the writer cannot drift.
 
+mod read;
 pub mod text;
 
 use std::collections::BTreeMap;
@@ -37,6 +38,9 @@ pub struct Report {
     pub targets: Vec<TargetReport>,
     /// Optimization results, when a goal was given.
     pub optimize: Option<OptimizeReport>,
+    /// Next-experiment suggestions, when requested.
+    #[serde(default)]
+    pub suggest: Option<SuggestReport>,
     /// Warnings and threats to interpretation.
     pub warnings: Vec<Warning>,
     /// Interpretation notes.
@@ -221,6 +225,52 @@ pub struct Stability {
     pub gp_budget: usize,
 }
 
+/// Next-experiment suggestions (R19).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SuggestReport {
+    /// Mode requested.
+    pub mode: String,
+    /// Picks chosen to exploit (reach goals / improve objectives).
+    pub exploit: usize,
+    /// Picks chosen to explore (reduce uncertainty).
+    pub explore: usize,
+    /// Controllables varied.
+    pub controllables: Vec<String>,
+    /// Search range per controllable (observed range widened by `expand`).
+    pub bounds: BTreeMap<String, [f64; 2]>,
+    /// Competing equations used per target, with weights relative to the selected one.
+    pub structures: BTreeMap<String, Vec<(String, f64)>>,
+    /// Suggestions in order of choice.
+    pub suggestions: Vec<SuggestionReport>,
+    /// What suggestions are and are not.
+    pub note: String,
+}
+
+/// One suggested experiment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SuggestionReport {
+    /// Order of choice, starting at 1.
+    pub id: usize,
+    /// Settings for the controllables.
+    pub inputs: BTreeMap<String, f64>,
+    /// Every non-target column for this experiment (non-controllables at their fixed values).
+    pub row: BTreeMap<String, f64>,
+    /// `exploit` or `explore`.
+    pub mode: String,
+    /// `uncertainty`, `equation_discrimination`, `goal_likelihood`, or `improvement`.
+    pub reason: String,
+    /// Acquisition score at the pick.
+    pub acquisition: f64,
+    /// Ensemble mean per target.
+    pub predictions: BTreeMap<String, f64>,
+    /// 90% ensemble range per target.
+    pub intervals: BTreeMap<String, [f64; 2]>,
+    /// Probability all hard goals hold (`null` without hard goals).
+    pub joint_probability: f64,
+    /// Inside the observed ranges and data domain.
+    pub in_domain: bool,
+}
+
 /// Optimization results.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct OptimizeReport {
@@ -351,6 +401,14 @@ impl std::fmt::Display for ReportError {
 impl std::error::Error for ReportError {}
 
 impl Report {
+    /// Read a report written by [`Report::to_json`]. `null` numbers read back as `NaN`.
+    pub fn from_json(text: &str) -> Result<Self, ReportError> {
+        use serde::Deserialize;
+        let v: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| ReportError(e.to_string()))?;
+        Report::deserialize(read::Lenient(v)).map_err(|e| ReportError(e.to_string()))
+    }
+
     /// Pretty JSON.
     pub fn to_json(&self) -> Result<String, ReportError> {
         serde_json::to_string_pretty(self).map_err(|e| ReportError(e.to_string()))
@@ -391,6 +449,25 @@ impl Report {
             }
         }
         write_csv(&headers, &rows).map_err(|e| ReportError(e.to_string()))
+    }
+
+    /// `suggestions.csv`: one row per suggestion with the dataset's columns; controllables and
+    /// fixed inputs filled, target columns empty so results can be filled in and appended.
+    pub fn suggestions_csv(
+        &self,
+        columns: &[String],
+        values: &[BTreeMap<String, f64>],
+    ) -> Result<String, ReportError> {
+        let rows: Vec<Vec<Cell>> = values
+            .iter()
+            .map(|v| {
+                columns
+                    .iter()
+                    .map(|c| v.get(c).map_or(Cell::Empty, |x| Cell::Num(*x)))
+                    .collect()
+            })
+            .collect();
+        write_csv(columns, &rows).map_err(|e| ReportError(e.to_string()))
     }
 
     /// `candidates.csv`: optimization candidates (header only when there are none).

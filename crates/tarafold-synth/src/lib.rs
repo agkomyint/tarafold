@@ -15,12 +15,14 @@ pub enum ColSpec {
     Uniform(&'static str, f64, f64),
     /// Computed from earlier columns with an infix expression.
     Derived(&'static str, &'static str),
+    /// Uniform over the grid `lo, lo + step, …, hi` (whole numbers when `step = 1`).
+    Grid(&'static str, f64, f64, f64),
 }
 
 impl ColSpec {
     fn name(&self) -> &'static str {
         match self {
-            Self::Uniform(n, ..) | Self::Derived(n, _) => n,
+            Self::Uniform(n, ..) | Self::Derived(n, _) | Self::Grid(n, ..) => n,
         }
     }
 }
@@ -119,7 +121,7 @@ pub enum SynthError {
     Write(String),
 }
 
-use ColSpec::{Derived, Uniform};
+use ColSpec::{Derived, Grid, Uniform};
 
 /// All built-in entries.
 pub fn registry() -> Vec<Entry> {
@@ -263,9 +265,77 @@ pub fn registry() -> Vec<Entry> {
             controllables: vec!["spend", "price"],
             example_goal: 50_000.0,
         },
+        Entry {
+            name: "production",
+            tier: "T10",
+            description: "Discrete inputs: output = 40 * machines^0.8 * hours^0.5 (machines whole, hours in 0.5 steps)",
+            columns: vec![
+                Grid("machines", 1.0, 20.0, 1.0),
+                Grid("hours", 1.0, 12.0, 0.5),
+                Derived("output", "40 * machines^0.8 * hours^0.5"),
+            ],
+            target: "output",
+            controllables: vec!["machines", "hours"],
+            example_goal: 600.0,
+        },
     ]
 }
 
+/// Input kinds of the registry entry's grid columns: `(name, step)`.
+pub fn grid_steps(entry: &Entry) -> Vec<(&'static str, f64)> {
+    entry
+        .columns
+        .iter()
+        .filter_map(|c| {
+            if let Grid(n, _, _, s) = c {
+                Some((*n, *s))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Input ranges `(name, lo, hi)` of the entry's uniform and grid columns.
+pub fn input_ranges(entry: &Entry) -> Vec<(&'static str, f64, f64)> {
+    entry
+        .columns
+        .iter()
+        .filter_map(|c| match c {
+            Uniform(n, lo, hi) | Grid(n, lo, hi, _) => Some((*n, *lo, *hi)),
+            Derived(..) => None,
+        })
+        .collect()
+}
+
+/// Evaluate every column of an entry for one row of input values (no noise). Inputs not
+/// given are an error. Used to "run an experiment" in closed-loop benchmarks.
+pub fn evaluate_row(
+    entry: &Entry,
+    inputs: &[(String, f64)],
+) -> Result<Vec<(String, f64)>, SynthError> {
+    let bad = |message: String| SynthError::BadEntry {
+        name: entry.name.into(),
+        message,
+    };
+    let mut names: Vec<String> = Vec::new();
+    let mut vals: Vec<f64> = Vec::new();
+    for spec in &entry.columns {
+        let v = match spec {
+            Uniform(n, ..) | Grid(n, ..) => inputs
+                .iter()
+                .find(|(k, _)| k == n)
+                .map(|(_, v)| *v)
+                .ok_or_else(|| SynthError::Params(format!("missing input `{n}`")))?,
+            Derived(_, src) => parse(src, &names)
+                .map_err(|e| bad(e.to_string()))?
+                .eval_point(&vals),
+        };
+        names.push(spec.name().to_string());
+        vals.push(v);
+    }
+    Ok(names.into_iter().zip(vals).collect())
+}
 /// Look up an entry by name.
 pub fn find(name: &str) -> Result<Entry, SynthError> {
     registry()
@@ -329,6 +399,12 @@ pub fn generate_widened(
                 };
                 let whi = hi + widen * span;
                 (0..rows).map(|_| rng.range(wlo, whi)).collect()
+            }
+            Grid(_, lo, hi, step) => {
+                let k = ((hi - lo) / step).round() as usize;
+                (0..rows)
+                    .map(|_| lo + step * rng.below(k + 1) as f64)
+                    .collect()
             }
             Derived(_, src) => {
                 let e = parse(src, &names).map_err(|e| bad(e.to_string()))?;

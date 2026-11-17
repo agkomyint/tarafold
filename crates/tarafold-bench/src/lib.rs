@@ -1,6 +1,8 @@
 //! Benchmark runner (R11, design §6.2): runs the synthetic registry through the full pipeline
 //! and scores each result against the hidden true equation.
 
+pub mod active;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::time::Instant;
@@ -260,6 +262,13 @@ pub fn run_case(case: &Case) -> CaseResult {
     };
     cfg.optimize.goal = Some(entry.example_goal);
     cfg.optimize.controllables = entry.controllables.iter().map(|s| s.to_string()).collect();
+    for (n, step) in tarafold_synth::grid_steps(&entry) {
+        if step == 1.0 {
+            cfg.optimize.integer.push(n.to_string());
+        } else {
+            cfg.optimize.steps.insert(n.to_string(), step);
+        }
+    }
     // Fewer stability rediscoveries than the CLI default keep the 132-case suite practical;
     // selection and structure metrics do not depend on them.
     cfg.validate.stability = 3;
@@ -356,6 +365,15 @@ pub fn run_case(case: &Case) -> CaseResult {
                 .collect();
             let Some(x) = x else { continue };
             inverse_total += 1;
+            // Discrete inputs must be on their grid.
+            let on_grid = tarafold_synth::grid_steps(&entry).iter().all(|(n, s)| {
+                c.inputs
+                    .get(*n)
+                    .is_none_or(|v| ((v - 1.0) / s - ((v - 1.0) / s).round()).abs() < 1e-9)
+            });
+            if !on_grid {
+                continue;
+            }
             if (truth.eval_point(&x) - o.goal).abs() <= o.tolerance {
                 inverse_ok += 1;
             }
