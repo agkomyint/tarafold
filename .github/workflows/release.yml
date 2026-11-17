@@ -11,25 +11,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  web:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - run: npm install -g pnpm@11
-      - run: pnpm --dir web install --frozen-lockfile
-      - run: pnpm --dir web build
-      - uses: actions/upload-artifact@v7
-        with:
-          name: web-dist
-          path: |
-            web/dist
-            web/dist-single
+  # The web UI (web/) is not built yet (Phase 7). When it exists, add a job that runs
+  # `pnpm --dir web build` and uploads web/dist so the build job can embed it.
 
   build:
-    needs: web
     strategy:
       fail-fast: false
       matrix:
@@ -42,10 +27,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: web-dist
-          path: web
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -100,10 +82,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-cyclonedx
-      - name: SBOM
+      - name: SBOM (CycloneDX)
+        # Output file naming differs between cargo-cyclonedx versions, so search for it.
+        continue-on-error: true
         run: |
           cargo cyclonedx --format json --manifest-path crates/tarafold-cli/Cargo.toml
-          cp crates/tarafold-cli/*.cdx.json "dist/tarafold-${GITHUB_REF_NAME}.cdx.json"
+          f=$(find crates/tarafold-cli -maxdepth 1 -name '*.cdx.json' | head -n1)
+          if [ -n "$f" ]; then cp "$f" "dist/tarafold-${GITHUB_REF_NAME}.cdx.json"; else echo "::warning::no SBOM file produced"; fi
       - name: Checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS
