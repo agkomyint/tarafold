@@ -159,14 +159,15 @@ impl Ctx<'_> {
                 })
                 .collect();
             let gg: f64 = gz.iter().map(|v| v * v).sum();
-            if !(gg > 0.0) || !gg.is_finite() {
+            if !gg.is_finite() || gg <= 0.0 {
                 break;
             }
             let mut t = 1.0;
             let mut improved = false;
             for _ in 0..30 {
-                let mut trial: Vec<f64> =
-                    (0..d).map(|k| xc[k] - t * r * gz[k] / gg * self.scale(k)).collect();
+                let mut trial: Vec<f64> = (0..d)
+                    .map(|k| xc[k] - t * r * gz[k] / gg * self.scale(k))
+                    .collect();
                 self.clamp(&mut trial);
                 let rt = self.f(&trial) - self.p.goal;
                 if rt.is_finite() && rt.abs() < r.abs() {
@@ -189,7 +190,9 @@ impl Ctx<'_> {
 fn solve_1d(ctx: &mut Ctx<'_>) -> Vec<Vec<f64>> {
     let [lo, hi] = ctx.bounds(0);
     let m = 1000;
-    let xs: Vec<f64> = (0..=m).map(|i| lo + (hi - lo) * i as f64 / m as f64).collect();
+    let xs: Vec<f64> = (0..=m)
+        .map(|i| lo + (hi - lo) * i as f64 / m as f64)
+        .collect();
     let gs: Vec<f64> = xs.iter().map(|&x| ctx.f(&[x]) - ctx.p.goal).collect();
     let mut out = Vec::new();
     for i in 0..m {
@@ -216,7 +219,10 @@ fn solve_1d(ctx: &mut Ctx<'_>) -> Vec<Vec<f64>> {
             out.push(vec![0.5 * (a + b)]);
         }
     }
-    if let Some(i) = (0..=m).filter(|&i| gs[i].is_finite()).min_by(|&a, &b| gs[a].abs().total_cmp(&gs[b].abs())) {
+    if let Some(i) = (0..=m)
+        .filter(|&i| gs[i].is_finite())
+        .min_by(|&a, &b| gs[a].abs().total_cmp(&gs[b].abs()))
+    {
         out.push(vec![xs[i]]);
     }
     out
@@ -229,13 +235,19 @@ fn solve_nd(ctx: &mut Ctx<'_>, rng: &mut Rng) -> Vec<Vec<f64>> {
     let np = (15 * d).clamp(20, 150);
     let budget = ctx.p.max_evals.max(np * 10);
     let rand_point = |ctx: &Ctx<'_>, rng: &mut Rng| -> Vec<f64> {
-        (0..d).map(|k| {
-            let [lo, hi] = ctx.bounds(k);
-            rng.range(lo, hi)
-        }).collect()
+        (0..d)
+            .map(|k| {
+                let [lo, hi] = ctx.bounds(k);
+                rng.range(lo, hi)
+            })
+            .collect()
     };
     let mut pop: Vec<Vec<f64>> = (0..np).map(|_| rand_point(ctx, rng)).collect();
-    let mut base: Vec<f64> = ctx.active.iter().map(|&a| ctx.p.baseline[ctx.p.controllables[a]]).collect();
+    let mut base: Vec<f64> = ctx
+        .active
+        .iter()
+        .map(|&a| ctx.p.baseline[ctx.p.controllables[a]])
+        .collect();
     ctx.clamp(&mut base);
     pop[0] = base.clone();
     let mut fit: Vec<f64> = pop.iter().map(|x| ctx.objective(x)).collect();
@@ -273,7 +285,11 @@ fn solve_nd(ctx: &mut Ctx<'_>, rng: &mut Rng) -> Vec<Vec<f64>> {
             }
         }
         let best = fit.iter().copied().fold(f64::INFINITY, f64::min);
-        stall = if best < best_prev - 1e-12 * best_prev.abs().max(1e-300) { 0 } else { stall + 1 };
+        stall = if best < best_prev - 1e-12 * best_prev.abs().max(1e-300) {
+            0
+        } else {
+            stall + 1
+        };
         best_prev = best;
     }
     let mut order: Vec<usize> = (0..np).collect();
@@ -289,7 +305,11 @@ fn solve_nd(ctx: &mut Ctx<'_>, rng: &mut Rng) -> Vec<Vec<f64>> {
 
 fn std_distance(ctx: &Ctx<'_>, a: &[f64], b: &[f64]) -> f64 {
     let d = a.len().max(1) as f64;
-    ((0..a.len()).map(|k| ((a[k] - b[k]) / ctx.scale(k)).powi(2)).sum::<f64>() / d).sqrt()
+    ((0..a.len())
+        .map(|k| ((a[k] - b[k]) / ctx.scale(k)).powi(2))
+        .sum::<f64>()
+        / d)
+        .sqrt()
 }
 
 /// Solve the problem.
@@ -298,9 +318,15 @@ pub fn optimize(p: &Problem<'_>) -> OptimizeOutput {
     let active: Vec<usize> = (0..p.controllables.len())
         .filter(|&k| u16::try_from(p.controllables[k]).is_ok_and(|v| used.contains(&v)))
         .collect();
-    let unused: Vec<usize> =
-        (0..p.controllables.len()).filter(|k| !active.contains(k)).map(|k| p.controllables[k]).collect();
-    let mut ctx = Ctx { p, active, evals: 0 };
+    let unused: Vec<usize> = (0..p.controllables.len())
+        .filter(|k| !active.contains(k))
+        .map(|k| p.controllables[k])
+        .collect();
+    let mut ctx = Ctx {
+        p,
+        active,
+        evals: 0,
+    };
     let mut rng = Rng::derive(p.seed, &[stream::OPTIMIZE]);
     let raw = match ctx.active.len() {
         0 => vec![Vec::new()],
@@ -320,17 +346,30 @@ pub fn optimize(p: &Problem<'_>) -> OptimizeOutput {
             let err = y - p.goal;
             let grad = p.expr.gradient(&x, x.len());
             let cand = OptCandidate {
-                change: p.controllables.iter().map(|&j| x[j] - p.baseline[j]).collect(),
+                change: p
+                    .controllables
+                    .iter()
+                    .map(|&j| x[j] - p.baseline[j])
+                    .collect(),
                 change_pct: p
                     .controllables
                     .iter()
-                    .map(|&j| (p.baseline[j] != 0.0).then(|| 100.0 * (x[j] - p.baseline[j]) / p.baseline[j].abs()))
+                    .map(|&j| {
+                        (p.baseline[j] != 0.0)
+                            .then(|| 100.0 * (x[j] - p.baseline[j]) / p.baseline[j].abs())
+                    })
                     .collect(),
                 sensitivity: p.controllables.iter().map(|&j| grad[j]).collect(),
                 elasticity: p
                     .controllables
                     .iter()
-                    .map(|&j| if y != 0.0 { grad[j] * x[j] / y } else { f64::NAN })
+                    .map(|&j| {
+                        if y != 0.0 {
+                            grad[j] * x[j] / y
+                        } else {
+                            f64::NAN
+                        }
+                    })
                     .collect(),
                 domain: p.domain.check(&x),
                 interval: [y - p.halfwidth, y + p.halfwidth],
@@ -344,7 +383,11 @@ pub fn optimize(p: &Problem<'_>) -> OptimizeOutput {
         .collect();
 
     let change_size = |c: &OptCandidate| -> f64 {
-        p.controllables.iter().zip(&c.change).map(|(&j, d)| (d / p.scale[j].max(1e-12)).powi(2)).sum::<f64>()
+        p.controllables
+            .iter()
+            .zip(&c.change)
+            .map(|(&j, d)| (d / p.scale[j].max(1e-12)).powi(2))
+            .sum::<f64>()
     };
     scored.sort_by(|(_, a), (_, b)| {
         b.within_tolerance
@@ -365,7 +408,10 @@ pub fn optimize(p: &Problem<'_>) -> OptimizeOutput {
         if chosen.len() >= p.n_candidates {
             break;
         }
-        if chosen.iter().all(|(other, _)| xc.is_empty() || std_distance(&ctx, xc, other) > 0.25) {
+        if chosen
+            .iter()
+            .all(|(other, _)| xc.is_empty() || std_distance(&ctx, xc, other) > 0.25)
+        {
             chosen.push((xc.clone(), c.clone()));
         }
     }
@@ -411,7 +457,10 @@ mod tests {
 
     fn domain(names: &[String], ranges: &[[f64; 2]]) -> Domain {
         let mut r = Rng::derive(1, &[]);
-        let x: Vec<Vec<f64>> = ranges.iter().map(|[lo, hi]| (0..500).map(|_| r.range(*lo, *hi)).collect()).collect();
+        let x: Vec<Vec<f64>> = ranges
+            .iter()
+            .map(|[lo, hi]| (0..500).map(|_| r.range(*lo, *hi)).collect())
+            .collect();
         Domain::fit(names, &x)
     }
 
@@ -440,8 +489,16 @@ mod tests {
         let dom = domain(&names, &[[-3.0, 3.0]]);
         let out = optimize(&problem(&e, &dom, vec![0], 4.0));
         assert!(out.reached);
-        let roots: Vec<f64> = out.candidates.iter().filter(|c| c.within_tolerance).map(|c| c.inputs[0]).collect();
-        assert!(roots.iter().any(|r| (r - 2.0).abs() < 1e-6) && roots.iter().any(|r| (r + 2.0).abs() < 1e-6));
+        let roots: Vec<f64> = out
+            .candidates
+            .iter()
+            .filter(|c| c.within_tolerance)
+            .map(|c| c.inputs[0])
+            .collect();
+        assert!(
+            roots.iter().any(|r| (r - 2.0).abs() < 1e-6)
+                && roots.iter().any(|r| (r + 2.0).abs() < 1e-6)
+        );
     }
 
     #[test]
@@ -470,8 +527,15 @@ mod tests {
         assert!(!out.reached);
         // Bounds are the sampled min/max (≈ 0.001..0.999), so the best reachable value is ≈ 2.
         let max_reach = dom.max[0] + dom.max[1];
-        assert!((out.closest_value - max_reach).abs() < 1e-9, "{} vs {max_reach}", out.closest_value);
-        assert_eq!(out.binding, vec!["0:upper".to_string(), "1:upper".to_string()]);
+        assert!(
+            (out.closest_value - max_reach).abs() < 1e-9,
+            "{} vs {max_reach}",
+            out.closest_value
+        );
+        assert_eq!(
+            out.binding,
+            vec!["0:upper".to_string(), "1:upper".to_string()]
+        );
     }
 
     #[test]

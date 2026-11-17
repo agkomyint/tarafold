@@ -297,8 +297,16 @@ impl Report {
     /// `equations.csv`: every front equation of every target.
     pub fn equations_csv(&self) -> Result<String, ReportError> {
         let headers: Vec<String> = [
-            "target", "id", "selected", "equation", "complexity", "strategy", "r2_train", "r2_val",
-            "r2_test", "rmse_test",
+            "target",
+            "id",
+            "selected",
+            "equation",
+            "complexity",
+            "strategy",
+            "r2_train",
+            "r2_val",
+            "r2_test",
+            "rmse_test",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -331,16 +339,27 @@ impl Report {
         let mut headers = vec!["id".to_string()];
         headers.extend(o.controllables.iter().cloned());
         headers.extend(
-            ["predicted", "interval_lo", "interval_hi", "error", "within_tolerance", "in_domain"]
-                .iter()
-                .map(|s| s.to_string()),
+            [
+                "predicted",
+                "interval_lo",
+                "interval_hi",
+                "error",
+                "within_tolerance",
+                "in_domain",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
         );
         let rows: Vec<Vec<Cell>> = o
             .candidates
             .iter()
             .map(|c| {
                 let mut r = vec![Cell::Num(c.id as f64)];
-                r.extend(o.controllables.iter().map(|n| Cell::Num(c.inputs.get(n).copied().unwrap_or(f64::NAN))));
+                r.extend(
+                    o.controllables
+                        .iter()
+                        .map(|n| Cell::Num(c.inputs.get(n).copied().unwrap_or(f64::NAN))),
+                );
                 r.extend([
                     Cell::Num(c.predicted),
                     Cell::Num(c.interval[0]),

@@ -87,7 +87,11 @@ fn dual_binary(op: BinOp, a: f64, da: f64, b: f64, db: f64) -> (f64, f64) {
         BinOp::Mul => da * b + a * db,
         BinOp::Div => (da * b - a * db) / (b * b),
         BinOp::Pow => {
-            let base_part = if da == 0.0 { 0.0 } else { b * apply_binary(BinOp::Pow, a, b - 1.0) * da };
+            let base_part = if da == 0.0 {
+                0.0
+            } else {
+                b * apply_binary(BinOp::Pow, a, b - 1.0) * da
+            };
             let exp_part = if db == 0.0 { 0.0 } else { v * a.ln() * db };
             base_part + exp_part
         }
@@ -136,7 +140,9 @@ impl Expr {
                 Node::Const(c) => stack.push(c),
                 Node::Var(i) => stack.push(x.get(i as usize).copied().unwrap_or(f64::NAN)),
                 Node::Unary(op) => {
-                    let Some(a) = stack.pop() else { return f64::NAN };
+                    let Some(a) = stack.pop() else {
+                        return f64::NAN;
+                    };
                     stack.push(apply_unary(op, a));
                 }
                 Node::Binary(op) => {
@@ -161,7 +167,9 @@ impl Expr {
                     stack.push((v, if i == var { 1.0 } else { 0.0 }));
                 }
                 Node::Unary(op) => {
-                    let Some((a, da)) = stack.pop() else { return (f64::NAN, f64::NAN) };
+                    let Some((a, da)) = stack.pop() else {
+                        return (f64::NAN, f64::NAN);
+                    };
                     stack.push(dual_unary(op, a, da));
                 }
                 Node::Binary(op) => {
@@ -172,7 +180,11 @@ impl Expr {
                 }
             }
         }
-        if stack.len() == 1 { stack[0] } else { (f64::NAN, f64::NAN) }
+        if stack.len() == 1 {
+            stack[0]
+        } else {
+            (f64::NAN, f64::NAN)
+        }
     }
 
     /// Gradient with respect to every variable `0..n_vars` at one point.
@@ -181,7 +193,11 @@ impl Expr {
         (0..n_vars)
             .map(|i| {
                 let i16 = u16::try_from(i).unwrap_or(u16::MAX);
-                if used.contains(&i16) { self.eval_partial(x, i16).1 } else { 0.0 }
+                if used.contains(&i16) {
+                    self.eval_partial(x, i16).1
+                } else {
+                    0.0
+                }
             })
             .collect()
     }

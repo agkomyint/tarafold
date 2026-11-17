@@ -90,8 +90,9 @@ impl Generated {
     /// The dataset as CSV text.
     pub fn to_csv(&self) -> Result<String, SynthError> {
         let n = self.columns.first().map_or(0, Vec::len);
-        let rows: Vec<Vec<Cell>> =
-            (0..n).map(|i| self.columns.iter().map(|c| Cell::Num(c[i])).collect()).collect();
+        let rows: Vec<Vec<Cell>> = (0..n)
+            .map(|i| self.columns.iter().map(|c| Cell::Num(c[i])).collect())
+            .collect();
         write_csv(&self.headers, &rows).map_err(|e| SynthError::Write(e.to_string()))
     }
 }
@@ -253,7 +254,10 @@ pub fn registry() -> Vec<Entry> {
             columns: vec![
                 Uniform("spend", 1_000.0, 50_000.0),
                 Uniform("price", 10.0, 50.0),
-                Derived("revenue", "120 * spend^0.6 * 0.08 * exp(-0.03 * price) * price"),
+                Derived(
+                    "revenue",
+                    "120 * spend^0.6 * 0.08 * exp(-0.03 * price) * price",
+                ),
             ],
             target: "revenue",
             controllables: vec!["spend", "price"],
@@ -264,7 +268,10 @@ pub fn registry() -> Vec<Entry> {
 
 /// Look up an entry by name.
 pub fn find(name: &str) -> Result<Entry, SynthError> {
-    registry().into_iter().find(|e| e.name == name).ok_or_else(|| SynthError::Unknown(name.into()))
+    registry()
+        .into_iter()
+        .find(|e| e.name == name)
+        .ok_or_else(|| SynthError::Unknown(name.into()))
 }
 
 /// Generate `rows` rows. `noise` is the std of Gaussian noise added to the target, as a
@@ -277,7 +284,9 @@ pub fn generate(
     seed: u64,
 ) -> Result<Generated, SynthError> {
     if rows == 0 || rows > 10_000_000 {
-        return Err(SynthError::Params("rows must be between 1 and 10,000,000".into()));
+        return Err(SynthError::Params(
+            "rows must be between 1 and 10,000,000".into(),
+        ));
     }
     if !(0.0..=10.0).contains(&noise) {
         return Err(SynthError::Params("noise must be between 0 and 10".into()));
@@ -285,7 +294,10 @@ pub fn generate(
     if distractors > 100 {
         return Err(SynthError::Params("at most 100 distractors".into()));
     }
-    let bad = |message: String| SynthError::BadEntry { name: entry.name.into(), message };
+    let bad = |message: String| SynthError::BadEntry {
+        name: entry.name.into(),
+        message,
+    };
     let mut rng = Rng::derive(seed, &[stream::SYNTH]);
     let mut names: Vec<String> = Vec::new();
     let mut cols: Vec<Vec<f64>> = Vec::new();
@@ -297,7 +309,9 @@ pub fn generate(
             Derived(_, src) => {
                 let e = parse(src, &names).map_err(|e| bad(e.to_string()))?;
                 let refs: Vec<&[f64]> = cols.iter().map(Vec::as_slice).collect();
-                let v = e.eval_columns(&refs, rows).ok_or_else(|| bad("evaluation failed".into()))?;
+                let v = e
+                    .eval_columns(&refs, rows)
+                    .ok_or_else(|| bad("evaluation failed".into()))?;
                 if v.iter().any(|x| !x.is_finite()) {
                     return Err(bad(format!("`{src}` produced non-finite values")));
                 }
@@ -311,7 +325,10 @@ pub fn generate(
         cols.push(values);
     }
     let (eq, eq_names) = truth_eq.ok_or_else(|| bad("target is not a derived column".into()))?;
-    let t = names.iter().position(|n| n == entry.target).ok_or_else(|| bad("no target".into()))?;
+    let t = names
+        .iter()
+        .position(|n| n == entry.target)
+        .ok_or_else(|| bad("no target".into()))?;
 
     for k in 1..=distractors {
         names.push(format!("z{k}"));
@@ -329,8 +346,11 @@ pub fn generate(
     cols.push(target_col);
     names.push(target_name);
 
-    let equation_variables: Vec<String> =
-        eq.variables().iter().map(|&i| eq_names[i as usize].clone()).collect();
+    let equation_variables: Vec<String> = eq
+        .variables()
+        .iter()
+        .map(|&i| eq_names[i as usize].clone())
+        .collect();
     let truth = Truth {
         name: entry.name.into(),
         tier: entry.tier.into(),
@@ -346,7 +366,11 @@ pub fn generate(
         distractors,
         seed,
     };
-    Ok(Generated { headers: names, columns: cols, truth })
+    Ok(Generated {
+        headers: names,
+        columns: cols,
+        truth,
+    })
 }
 
 #[cfg(test)]

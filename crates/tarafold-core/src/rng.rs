@@ -91,7 +91,9 @@ mod tests {
 
     #[test]
     fn same_path_same_stream() {
-        let a: Vec<u64> = (0..5).map(|_| Rng::derive(42, &[1, 2]).next_u64()).collect();
+        let a: Vec<u64> = (0..5)
+            .map(|_| Rng::derive(42, &[1, 2]).next_u64())
+            .collect();
         assert!(a.windows(2).all(|w| w[0] == w[1]));
         let mut r1 = Rng::derive(42, &[1]);
         let mut r2 = Rng::derive(42, &[2]);

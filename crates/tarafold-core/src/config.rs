@@ -54,7 +54,11 @@ pub struct SplitConfig {
 
 impl Default for SplitConfig {
     fn default() -> Self {
-        Self { train: 0.6, val: 0.2, strategy: SplitStrategy::Random }
+        Self {
+            train: 0.6,
+            val: 0.2,
+            strategy: SplitStrategy::Random,
+        }
     }
 }
 
@@ -129,7 +133,10 @@ mod tests {
 
     #[test]
     fn toml_roundtrip_and_partial() {
-        let mut c = RunConfig { targets: vec!["y".into()], ..Default::default() };
+        let mut c = RunConfig {
+            targets: vec!["y".into()],
+            ..Default::default()
+        };
         c.optimize.goal = Some(10.0);
         c.optimize.bounds.insert("x".into(), [0.0, 5.0]);
         let s = toml::to_string_pretty(&c).unwrap();

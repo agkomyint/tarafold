@@ -25,7 +25,10 @@ const MAX_INPUT: usize = 64 * 1024;
 const MAX_DEPTH: usize = 256;
 
 fn err<T>(message: impl Into<String>, pos: usize) -> Result<T, ParseError> {
-    Err(ParseError { message: message.into(), pos })
+    Err(ParseError {
+        message: message.into(),
+        pos,
+    })
 }
 
 fn tokenize(s: &str) -> Result<Vec<(Tok, usize)>, ParseError> {
@@ -169,9 +172,10 @@ impl Parser<'_> {
             }
             _ => return err("expected a number, variable, function, or `(`", start),
         };
-        loop {
-            let Some(Tok::Op(c)) = self.peek().cloned() else { break };
-            let Some((lbp, rbp, op)) = Self::infix_bp(c) else { break };
+        while let Some(Tok::Op(c)) = self.peek().cloned() {
+            let Some((lbp, rbp, op)) = Self::infix_bp(c) else {
+                break;
+            };
             if lbp < min_bp {
                 break;
             }
@@ -189,7 +193,12 @@ impl Parser<'_> {
 /// and the functions `exp log ln sqrt square abs sin cos tanh inv`.
 pub fn parse(input: &str, names: &[String]) -> Result<Expr, ParseError> {
     let toks = tokenize(input)?;
-    let mut p = Parser { toks, pos: 0, names, end: input.len() };
+    let mut p = Parser {
+        toks,
+        pos: 0,
+        names,
+        end: input.len(),
+    };
     let e = p.expr(0, 0)?;
     if p.pos != p.toks.len() {
         return err("unexpected input", p.here());

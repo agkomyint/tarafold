@@ -45,7 +45,9 @@ pub enum IoError {
         reason: String,
     },
     /// Too few usable rows after dropping missing values (R3.7).
-    #[error("only {0} usable rows remain after dropping rows with missing values; at least 30 are needed")]
+    #[error(
+        "only {0} usable rows remain after dropping rows with missing values; at least 30 are needed"
+    )]
     TooFewRows(usize),
     /// Invalid weight column (R3.10).
     #[error("invalid weights column `{name}`: {reason}")]
@@ -93,7 +95,9 @@ impl Default for IngestOptions {
     }
 }
 
-const MISSING_TOKENS: [&str; 10] = ["", "na", "n/a", "nan", "null", "none", "nil", "?", "-", "#n/a"];
+const MISSING_TOKENS: [&str; 10] = [
+    "", "na", "n/a", "nan", "null", "none", "nil", "?", "-", "#n/a",
+];
 
 fn is_missing_token(s: &str) -> bool {
     let t = s.trim();
@@ -102,18 +106,31 @@ fn is_missing_token(s: &str) -> bool {
 
 fn parse_number(s: &str, decimal: char) -> Option<f64> {
     let t = s.trim();
-    let v = if decimal == ',' { t.replace(',', ".").parse::<f64>() } else { t.parse::<f64>() };
+    let v = if decimal == ',' {
+        t.replace(',', ".").parse::<f64>()
+    } else {
+        t.parse::<f64>()
+    };
     v.ok().filter(|v| v.is_finite())
 }
 
 /// Guess the delimiter from the first lines: the candidate with a consistent field count > 1,
 /// preferring more fields. Quotes are ignored, which is fine for a guess.
 fn sniff_delimiter(head: &str) -> u8 {
-    let lines: Vec<&str> = head.lines().filter(|l| !l.trim().is_empty()).take(30).collect();
+    let lines: Vec<&str> = head
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(30)
+        .collect();
     let mut best = (b',', 0usize, false);
-    for &d in &[b',', b';', b'\t', b'|'] {
-        let counts: Vec<usize> = lines.iter().map(|l| l.matches(d as char).count() + 1).collect();
-        let Some(&first) = counts.first() else { continue };
+    for &d in b",;\t|" {
+        let counts: Vec<usize> = lines
+            .iter()
+            .map(|l| l.matches(d as char).count() + 1)
+            .collect();
+        let Some(&first) = counts.first() else {
+            continue;
+        };
         let consistent = counts.iter().all(|&c| c == first);
         if first > 1 && (consistent && !best.2 || (consistent == best.2 && first > best.1)) {
             best = (d, first, consistent);
@@ -159,18 +176,29 @@ fn hex(bytes: &[u8]) -> String {
 /// Columns are numeric when ≥ 95% of non-missing cells parse as finite numbers. Rows with a
 /// missing value in any used column are dropped and counted. Constant, duplicate, mostly
 /// missing, and non-numeric columns are excluded with a reason.
-pub fn read_csv(mut input: impl Read, label: &str, opts: &IngestOptions) -> Result<Dataset, IoError> {
+pub fn read_csv(
+    mut input: impl Read,
+    label: &str,
+    opts: &IngestOptions,
+) -> Result<Dataset, IoError> {
     let mut bytes = Vec::new();
-    let limit = u64::try_from(opts.max_bytes).unwrap_or(u64::MAX).saturating_add(1);
+    let limit = u64::try_from(opts.max_bytes)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
     input.by_ref().take(limit).read_to_end(&mut bytes)?;
     if bytes.len() > opts.max_bytes {
-        return Err(IoError::Limit { what: "file size (bytes)", limit: opts.max_bytes });
+        return Err(IoError::Limit {
+            what: "file size (bytes)",
+            limit: opts.max_bytes,
+        });
     }
     let sha256 = hex(&Sha256::digest(&bytes));
     let body = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes); // UTF-8 BOM
     let head = String::from_utf8_lossy(&body[..body.len().min(64 * 1024)]);
     let delimiter = opts.delimiter.unwrap_or_else(|| sniff_delimiter(&head));
-    let decimal = opts.decimal.unwrap_or_else(|| sniff_decimal(&head, delimiter));
+    let decimal = opts
+        .decimal
+        .unwrap_or_else(|| sniff_decimal(&head, delimiter));
 
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(delimiter)
@@ -181,13 +209,20 @@ pub fn read_csv(mut input: impl Read, label: &str, opts: &IngestOptions) -> Resu
         line: e.position().map_or(0, csv::Position::line),
         message: e.to_string(),
     };
-    let headers: Vec<String> =
-        rdr.headers().map_err(csv_err)?.iter().map(|h| h.trim().to_string()).collect();
+    let headers: Vec<String> = rdr
+        .headers()
+        .map_err(csv_err)?
+        .iter()
+        .map(|h| h.trim().to_string())
+        .collect();
     if headers.is_empty() || headers.iter().all(String::is_empty) {
         return Err(IoError::Empty);
     }
     if headers.len() > opts.max_cols {
-        return Err(IoError::Limit { what: "column count", limit: opts.max_cols });
+        return Err(IoError::Limit {
+            what: "column count",
+            limit: opts.max_cols,
+        });
     }
     let p = headers.len();
     let mut values: Vec<Vec<f64>> = vec![Vec::new(); p];
@@ -198,7 +233,10 @@ pub fn read_csv(mut input: impl Read, label: &str, opts: &IngestOptions) -> Resu
         let rec = rec.map_err(csv_err)?;
         n_rows += 1;
         if n_rows > opts.max_rows {
-            return Err(IoError::Limit { what: "row count", limit: opts.max_rows });
+            return Err(IoError::Limit {
+                what: "row count",
+                limit: opts.max_rows,
+            });
         }
         for (j, cell) in rec.iter().enumerate() {
             if is_missing_token(cell) {
@@ -236,7 +274,10 @@ pub fn read_csv(mut input: impl Read, label: &str, opts: &IngestOptions) -> Resu
             None
         };
         match reason {
-            Some(r) => excluded.push(ExcludedColumn { name: name.clone(), reason: r }),
+            Some(r) => excluded.push(ExcludedColumn {
+                name: name.clone(),
+                reason: r,
+            }),
             None => keep.push(j),
         }
     }
@@ -245,13 +286,17 @@ pub fn read_csv(mut input: impl Read, label: &str, opts: &IngestOptions) -> Resu
             return Err(IoError::MissingColumn(req.clone()));
         }
         if let Some(e) = excluded.iter().find(|e| &e.name == req) {
-            return Err(IoError::UnusableColumn { name: req.clone(), reason: e.reason.clone() });
+            return Err(IoError::UnusableColumn {
+                name: req.clone(),
+                reason: e.reason.clone(),
+            });
         }
     }
 
     // Drop rows with missing values in kept columns.
-    let complete: Vec<usize> =
-        (0..n_rows).filter(|&i| keep.iter().all(|&j| values[j][i].is_finite())).collect();
+    let complete: Vec<usize> = (0..n_rows)
+        .filter(|&i| keep.iter().all(|&j| values[j][i].is_finite()))
+        .collect();
     if complete.len() < opts.min_rows {
         return Err(IoError::TooFewRows(complete.len()));
     }
@@ -262,14 +307,20 @@ pub fn read_csv(mut input: impl Read, label: &str, opts: &IngestOptions) -> Resu
         let is_required = opts.required.contains(&name) || opts.weights.as_ref() == Some(&name);
         let first = v[0];
         if !is_required && v.iter().all(|&x| x == first) {
-            excluded.push(ExcludedColumn { name, reason: "constant".into() });
+            excluded.push(ExcludedColumn {
+                name,
+                reason: "constant".into(),
+            });
             continue;
         }
-        if let Some(dup) = columns.iter().find(|c| c.values == v) {
-            if !is_required {
-                excluded.push(ExcludedColumn { name, reason: format!("duplicate_of:{}", dup.name) });
-                continue;
-            }
+        if let Some(dup) = columns.iter().find(|c| c.values == v)
+            && !is_required
+        {
+            excluded.push(ExcludedColumn {
+                name,
+                reason: format!("duplicate_of:{}", dup.name),
+            });
+            continue;
         }
         columns.push(Column { name, values: v });
     }
@@ -277,9 +328,13 @@ pub fn read_csv(mut input: impl Read, label: &str, opts: &IngestOptions) -> Resu
     let weights = match &opts.weights {
         None => None,
         Some(wname) => {
-            let pos = columns.iter().position(|c| &c.name == wname).ok_or_else(|| {
-                IoError::InvalidWeights { name: wname.clone(), reason: "column not usable".into() }
-            })?;
+            let pos = columns
+                .iter()
+                .position(|c| &c.name == wname)
+                .ok_or_else(|| IoError::InvalidWeights {
+                    name: wname.clone(),
+                    reason: "column not usable".into(),
+                })?;
             let w = columns.remove(pos).values;
             if w.iter().any(|&x| x < 0.0) {
                 return Err(IoError::InvalidWeights {
@@ -339,7 +394,10 @@ pub fn guard_text(s: &str) -> String {
 /// Write rows as CSV (comma-delimited, RFC 4180 quoting).
 pub fn write_csv(headers: &[String], rows: &[Vec<Cell>]) -> Result<String, IoError> {
     let mut w = csv::WriterBuilder::new().from_writer(Vec::new());
-    let map_err = |e: csv::Error| IoError::Csv { line: 0, message: e.to_string() };
+    let map_err = |e: csv::Error| IoError::Csv {
+        line: 0,
+        message: e.to_string(),
+    };
     let hdr: Vec<String> = headers.iter().map(|h| guard_text(h)).collect();
     w.write_record(&hdr).map_err(map_err)?;
     for row in rows {
@@ -353,8 +411,14 @@ pub fn write_csv(headers: &[String], rows: &[Vec<Cell>]) -> Result<String, IoErr
             .collect();
         w.write_record(&rec).map_err(map_err)?;
     }
-    let bytes = w.into_inner().map_err(|e| IoError::Csv { line: 0, message: e.to_string() })?;
-    String::from_utf8(bytes).map_err(|e| IoError::Csv { line: 0, message: e.to_string() })
+    let bytes = w.into_inner().map_err(|e| IoError::Csv {
+        line: 0,
+        message: e.to_string(),
+    })?;
+    String::from_utf8(bytes).map_err(|e| IoError::Csv {
+        line: 0,
+        message: e.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -369,12 +433,20 @@ mod tests {
     fn comma_csv_with_mixed_columns() {
         let csv = format!(
             "x,y,region,const,dup,sparse\n{}",
-            rows(40, |i| format!("{i},{},north,1,{i},{}", 2 * i, if i % 3 == 0 { "5" } else { "" }))
+            rows(40, |i| format!(
+                "{i},{},north,1,{i},{}",
+                2 * i,
+                if i % 3 == 0 { "5" } else { "" }
+            ))
         );
         let d = read_csv(csv.as_bytes(), "t.csv", &IngestOptions::default()).unwrap();
         assert_eq!(d.names(), vec!["x", "y"]);
-        let reasons: Vec<(&str, &str)> =
-            d.source.excluded.iter().map(|e| (e.name.as_str(), e.reason.as_str())).collect();
+        let reasons: Vec<(&str, &str)> = d
+            .source
+            .excluded
+            .iter()
+            .map(|e| (e.name.as_str(), e.reason.as_str()))
+            .collect();
         assert!(reasons.contains(&("region", "non_numeric")));
         assert!(reasons.contains(&("const", "constant")));
         assert!(reasons.contains(&("dup", "duplicate_of:x")));
@@ -401,38 +473,65 @@ mod tests {
             read_csv(csv.as_bytes(), "t", &IngestOptions::default()),
             Err(IoError::TooFewRows(10))
         ));
-        let opts = IngestOptions { max_rows: 5, ..Default::default() };
-        assert!(matches!(read_csv(csv.as_bytes(), "t", &opts), Err(IoError::Limit { .. })));
-        let opts = IngestOptions { max_bytes: 10, ..Default::default() };
-        assert!(matches!(read_csv(csv.as_bytes(), "t", &opts), Err(IoError::Limit { .. })));
+        let opts = IngestOptions {
+            max_rows: 5,
+            ..Default::default()
+        };
+        assert!(matches!(
+            read_csv(csv.as_bytes(), "t", &opts),
+            Err(IoError::Limit { .. })
+        ));
+        let opts = IngestOptions {
+            max_bytes: 10,
+            ..Default::default()
+        };
+        assert!(matches!(
+            read_csv(csv.as_bytes(), "t", &opts),
+            Err(IoError::Limit { .. })
+        ));
     }
 
     #[test]
     fn required_columns_and_weights() {
-        let csv = format!("x,y,w,label\n{}", rows(40, |i| format!("{i},{},{},a", i * 3, i % 4)));
-        let opts = IngestOptions { required: vec!["label".into()], ..Default::default() };
+        let csv = format!(
+            "x,y,w,label\n{}",
+            rows(40, |i| format!("{i},{},{},a", i * 3, i % 4))
+        );
+        let opts = IngestOptions {
+            required: vec!["label".into()],
+            ..Default::default()
+        };
         assert!(matches!(
             read_csv(csv.as_bytes(), "t", &opts),
             Err(IoError::UnusableColumn { .. })
         ));
-        let opts = IngestOptions { weights: Some("w".into()), ..Default::default() };
+        let opts = IngestOptions {
+            weights: Some("w".into()),
+            ..Default::default()
+        };
         let d = read_csv(csv.as_bytes(), "t", &opts).unwrap();
         assert_eq!(d.names(), vec!["x", "y"]);
         let w = d.weights.unwrap();
         assert!((w.iter().sum::<f64>() / w.len() as f64 - 1.0).abs() < 1e-12);
         let bad = format!("x,y,w\n{}", rows(40, |i| format!("{i},{i}2,-1")));
-        let opts = IngestOptions { weights: Some("w".into()), ..Default::default() };
-        assert!(matches!(read_csv(bad.as_bytes(), "t", &opts), Err(IoError::InvalidWeights { .. })));
+        let opts = IngestOptions {
+            weights: Some("w".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            read_csv(bad.as_bytes(), "t", &opts),
+            Err(IoError::InvalidWeights { .. })
+        ));
     }
 
     #[test]
     fn export_guards_formulas() {
         let s = write_csv(
             &["equation".into(), "r2".into()],
-            &[vec![Cell::Text("=HYPERLINK(\"x\")".into()), Cell::Num(0.5)], vec![
-                Cell::Text("-2 * x".into()),
-                Cell::Empty,
-            ]],
+            &[
+                vec![Cell::Text("=HYPERLINK(\"x\")".into()), Cell::Num(0.5)],
+                vec![Cell::Text("-2 * x".into()), Cell::Empty],
+            ],
         )
         .unwrap();
         assert!(s.contains("'=HYPERLINK"));

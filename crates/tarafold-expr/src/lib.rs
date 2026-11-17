@@ -114,12 +114,16 @@ pub struct Expr {
 impl Expr {
     /// Constant expression.
     pub fn constant(c: f64) -> Self {
-        Self { nodes: vec![Node::Const(c)] }
+        Self {
+            nodes: vec![Node::Const(c)],
+        }
     }
 
     /// Variable expression.
     pub fn var(i: u16) -> Self {
-        Self { nodes: vec![Node::Var(i)] }
+        Self {
+            nodes: vec![Node::Var(i)],
+        }
     }
 
     /// Apply a unary operator.
@@ -133,16 +137,6 @@ impl Expr {
         a.nodes.extend(b.nodes);
         a.nodes.push(Node::Binary(op));
         a
-    }
-
-    /// `a + b`
-    pub fn add(a: Self, b: Self) -> Self {
-        Self::binary(BinOp::Add, a, b)
-    }
-
-    /// `a * b`
-    pub fn mul(a: Self, b: Self) -> Self {
-        Self::binary(BinOp::Mul, a, b)
     }
 
     /// `a ^ b`
@@ -188,8 +182,30 @@ impl Expr {
     pub fn constants(&self) -> Vec<f64> {
         self.nodes
             .iter()
-            .filter_map(|n| if let Node::Const(c) = n { Some(*c) } else { None })
+            .filter_map(|n| {
+                if let Node::Const(c) = n {
+                    Some(*c)
+                } else {
+                    None
+                }
+            })
             .collect()
+    }
+
+    /// Same structure with constants replaced, in postfix order. Extra values are ignored and
+    /// missing ones keep their current value.
+    pub fn with_constants(&self, values: &[f64]) -> Self {
+        let mut it = values.iter();
+        Self {
+            nodes: self
+                .nodes
+                .iter()
+                .map(|n| match n {
+                    Node::Const(c) => Node::Const(it.next().copied().unwrap_or(*c)),
+                    other => *other,
+                })
+                .collect(),
+        }
     }
 
     /// Rename variables: `Var(i)` becomes `Var(map[i])`.
@@ -214,7 +230,9 @@ impl Expr {
             match n {
                 Node::Const(_) | Node::Var(_) => stack.push(Expr { nodes: vec![n] }),
                 Node::Unary(op) => {
-                    let Some(a) = stack.pop() else { return self.clone() };
+                    let Some(a) = stack.pop() else {
+                        return self.clone();
+                    };
                     if let [Node::Const(c)] = a.nodes[..] {
                         let v = eval::apply_unary(op, c);
                         if v.is_finite() {
@@ -228,8 +246,16 @@ impl Expr {
                     let (Some(b), Some(a)) = (stack.pop(), stack.pop()) else {
                         return self.clone();
                     };
-                    let ca = if let [Node::Const(c)] = a.nodes[..] { Some(c) } else { None };
-                    let cb = if let [Node::Const(c)] = b.nodes[..] { Some(c) } else { None };
+                    let ca = if let [Node::Const(c)] = a.nodes[..] {
+                        Some(c)
+                    } else {
+                        None
+                    };
+                    let cb = if let [Node::Const(c)] = b.nodes[..] {
+                        Some(c)
+                    } else {
+                        None
+                    };
                     if let (Some(x), Some(y)) = (ca, cb) {
                         let v = eval::apply_binary(op, x, y);
                         if v.is_finite() {
@@ -238,10 +264,17 @@ impl Expr {
                         }
                     }
                     let out = match (op, ca, cb) {
-                        (BinOp::Mul, Some(c), _) if c == 1.0 => b,
-                        (BinOp::Mul | BinOp::Div | BinOp::Pow, _, Some(c)) if c == 1.0 => a,
-                        (BinOp::Add, Some(c), _) if c == 0.0 => b,
-                        (BinOp::Add | BinOp::Sub, _, Some(c)) if c == 0.0 => a,
+                        (BinOp::Mul, Some(1.0), _) => b,
+                        (BinOp::Mul | BinOp::Div | BinOp::Pow, _, Some(1.0)) => a,
+                        (BinOp::Add, Some(0.0), _) => b,
+                        (BinOp::Add | BinOp::Sub, _, Some(0.0)) => a,
+                        // a - (-c) → a + c and a + (-c) → a - c (same value, cleaner output).
+                        (BinOp::Sub, _, Some(c)) if c < 0.0 => {
+                            Expr::binary(BinOp::Add, a, Expr::constant(-c))
+                        }
+                        (BinOp::Add, _, Some(c)) if c < 0.0 => {
+                            Expr::binary(BinOp::Sub, a, Expr::constant(-c))
+                        }
                         _ => Expr::binary(op, a, b),
                     };
                     stack.push(out);
@@ -252,6 +285,24 @@ impl Expr {
             (Some(e), true) => e,
             _ => self.clone(),
         }
+    }
+}
+
+impl std::ops::Add for Expr {
+    type Output = Expr;
+
+    /// `a + b`.
+    fn add(self, rhs: Expr) -> Expr {
+        Expr::binary(BinOp::Add, self, rhs)
+    }
+}
+
+impl std::ops::Mul for Expr {
+    type Output = Expr;
+
+    /// `a * b`.
+    fn mul(self, rhs: Expr) -> Expr {
+        Expr::binary(BinOp::Mul, self, rhs)
     }
 }
 

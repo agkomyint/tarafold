@@ -12,7 +12,7 @@ use tarafold_report::{
     Report, RunInfo, RunStatus, SCHEMA_VERSION, ScreenDecision, SplitMetrics, StageTiming,
     TargetReport, ValidateReport, Warning, text,
 };
-use tarafold_validate::{Domain, GradeInputs, Grade, evidence, grade, residual_halfwidth, score};
+use tarafold_validate::{Domain, Grade, GradeInputs, evidence, grade, residual_halfwidth, score};
 
 /// Pipeline failures. The CLI maps these to exit codes.
 #[derive(Debug, thiserror::Error)]
@@ -74,7 +74,10 @@ struct Fitted {
 fn timed<T>(stages: &mut Vec<StageTiming>, name: &str, f: impl FnOnce() -> T) -> T {
     let t = Instant::now();
     let out = f();
-    stages.push(StageTiming { name: name.into(), millis: t.elapsed().as_millis() as u64 });
+    stages.push(StageTiming {
+        name: name.into(),
+        millis: t.elapsed().as_millis() as u64,
+    });
     out
 }
 
@@ -86,19 +89,32 @@ fn fit_target(
     warnings: &mut Vec<Warning>,
     stages: &mut Vec<StageTiming>,
 ) -> Result<Fitted, EngineError> {
-    let ti = data.index_of(target).map_err(|_| EngineError::Config(format!("target `{target}` is not a usable numeric column")))?;
+    let ti = data.index_of(target).map_err(|_| {
+        EngineError::Config(format!("target `{target}` is not a usable numeric column"))
+    })?;
     let y = &data.columns[ti].values;
     let ty_full = stats::gather(y, &split.train);
     let all_features: Vec<usize> = (0..data.columns.len()).filter(|&j| j != ti).collect();
     if all_features.is_empty() {
-        return Err(EngineError::Data("no feature columns besides the target".into()));
+        return Err(EngineError::Data(
+            "no feature columns besides the target".into(),
+        ));
     }
 
     // Screening: keep up to max_features by |Pearson r| with the target on training rows.
     // (Phase 4 replaces this with importance + mutual information.)
     let mut ranked: Vec<(f64, usize)> = all_features
         .iter()
-        .map(|&j| (stats::pearson(&stats::gather(&data.columns[j].values, &split.train), &ty_full).abs(), j))
+        .map(|&j| {
+            (
+                stats::pearson(
+                    &stats::gather(&data.columns[j].values, &split.train),
+                    &ty_full,
+                )
+                .abs(),
+                j,
+            )
+        })
         .collect();
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
     let max_f = cfg.discover.max_features.max(1);
@@ -123,7 +139,10 @@ fn fit_target(
     if ranked.len() > max_f {
         warnings.push(Warning {
             code: "features_screened".into(),
-            message: format!("{} features were not used because max_features = {max_f}", ranked.len() - max_f),
+            message: format!(
+                "{} features were not used because max_features = {max_f}",
+                ranked.len() - max_f
+            ),
             target: Some(target.into()),
         });
     }
@@ -141,11 +160,19 @@ fn fit_target(
         train_rows.sort_unstable();
         warnings.push(Warning {
             code: "subsampled".into(),
-            message: format!("discovery used {} of {} training rows", train_rows.len(), split.train.len()),
+            message: format!(
+                "discovery used {} of {} training rows",
+                train_rows.len(),
+                split.train.len()
+            ),
             target: Some(target.into()),
         });
     }
-    let cols = |rows: &[u32]| -> Vec<Vec<f64>> { kept.iter().map(|&j| stats::gather(&data.columns[j].values, rows)).collect() };
+    let cols = |rows: &[u32]| -> Vec<Vec<f64>> {
+        kept.iter()
+            .map(|&j| stats::gather(&data.columns[j].values, rows))
+            .collect()
+    };
     let prepared = Prepared {
         names: kept.iter().map(|&j| data.columns[j].name.clone()).collect(),
         tx: cols(&split.train),
@@ -182,7 +209,12 @@ fn fit_target(
             tree: c.expr.to_tree(names),
             complexity: c.complexity,
             constants: c.expr.constants(),
-            variables: c.expr.variables().iter().map(|&i| names[i as usize].clone()).collect(),
+            variables: c
+                .expr
+                .variables()
+                .iter()
+                .map(|&i| names[i as usize].clone())
+                .collect(),
             strategy: c.strategy,
             metrics: SplitMetrics {
                 train: score(&c.expr, &prepared.tx, &prepared.ty).0,
@@ -196,15 +228,26 @@ fn fit_target(
 
     // Validation of the selected equation.
     let (val_pred, test_pred) = timed(stages, &format!("validate:{target}"), || {
-        (score(&sel.expr, &prepared.vx, &prepared.vy).1, score(&sel.expr, &prepared.sx, &prepared.sy).1)
+        (
+            score(&sel.expr, &prepared.vx, &prepared.vy).1,
+            score(&sel.expr, &prepared.sx, &prepared.sy).1,
+        )
     });
     let halfwidth = residual_halfwidth(&val_pred, &prepared.vy, 0.9);
-    let covered = test_pred.iter().zip(&prepared.sy).filter(|(p, y)| (*p - *y).abs() <= halfwidth).count();
+    let covered = test_pred
+        .iter()
+        .zip(&prepared.sy)
+        .filter(|(p, y)| (*p - *y).abs() <= halfwidth)
+        .count();
     let coverage = covered as f64 / prepared.sy.len().max(1) as f64;
     let test_r2 = sel_report.metrics.test.r2;
     let leak_used = sel_report.variables.iter().any(|v| leakage.contains(v));
     let reliability = grade(&GradeInputs {
-        test_r2: if test_r2.is_finite() { test_r2 } else { f64::NEG_INFINITY },
+        test_r2: if test_r2.is_finite() {
+            test_r2
+        } else {
+            f64::NEG_INFINITY
+        },
         best_baseline_r2: None,
         stability: None,
         n_train: prepared.ty.len(),
@@ -223,7 +266,9 @@ fn fit_target(
     if reliability.grade == Grade::Low {
         warnings.push(Warning {
             code: "low_reliability".into(),
-            message: format!("the selected equation for `{target}` is graded low (test R² = {test_r2:.3})"),
+            message: format!(
+                "the selected equation for `{target}` is graded low (test R² = {test_r2:.3})"
+            ),
             target: Some(target.into()),
         });
     }
@@ -253,24 +298,45 @@ fn fit_target(
             domain: domain.clone(),
         },
     };
-    Ok(Fitted { report, expr: sel.expr.clone(), domain, prepared, halfwidth, evidence: ev })
+    Ok(Fitted {
+        report,
+        expr: sel.expr.clone(),
+        domain,
+        prepared,
+        halfwidth,
+        evidence: ev,
+    })
 }
 
-fn run_optimize(f: &Fitted, cfg: &RunConfig, goal: f64, seed: u64) -> Result<OptimizeReport, EngineError> {
+fn run_optimize(
+    f: &Fitted,
+    cfg: &RunConfig,
+    goal: f64,
+    seed: u64,
+) -> Result<OptimizeReport, EngineError> {
     let names = &f.prepared.names;
     let oc = &cfg.optimize;
     let idx = |n: &str| -> Result<usize, EngineError> {
         names.iter().position(|m| m == n).ok_or_else(|| {
-            EngineError::Config(format!("`{n}` is not a feature used for `{}` (features: {})", f.report.target, names.join(", ")))
+            EngineError::Config(format!(
+                "`{n}` is not a feature used for `{}` (features: {})",
+                f.report.target,
+                names.join(", ")
+            ))
         })
     };
     let controllables: Vec<usize> = if oc.controllables.is_empty() {
         f.expr.variables().iter().map(|&v| v as usize).collect()
     } else {
-        oc.controllables.iter().map(|n| idx(n)).collect::<Result<_, _>>()?
+        oc.controllables
+            .iter()
+            .map(|n| idx(n))
+            .collect::<Result<_, _>>()?
     };
     if controllables.is_empty() {
-        return Err(EngineError::Config("no controllable features; pass --control".into()));
+        return Err(EngineError::Config(
+            "no controllable features; pass --control".into(),
+        ));
     }
     let mut baseline = f.domain.median.clone();
     for (n, v) in &oc.fixed {
@@ -280,18 +346,26 @@ fn run_optimize(f: &Fitted, cfg: &RunConfig, goal: f64, seed: u64) -> Result<Opt
     for &j in &controllables {
         let b = match oc.bounds.get(&names[j]) {
             Some(&[lo, hi]) if lo <= hi && lo.is_finite() && hi.is_finite() => [lo, hi],
-            Some(b) => return Err(EngineError::Config(format!("invalid bounds for `{}`: {b:?}", names[j]))),
+            Some(b) => {
+                return Err(EngineError::Config(format!(
+                    "invalid bounds for `{}`: {b:?}",
+                    names[j]
+                )));
+            }
             None => [f.domain.min[j], f.domain.max[j]],
         };
         bounds.push(b);
     }
-    for (n, _) in oc.bounds.iter() {
+    for n in oc.bounds.keys() {
         if !controllables.iter().any(|&j| &names[j] == n) {
-            return Err(EngineError::Config(format!("bounds given for `{n}`, which is not a controllable")));
+            return Err(EngineError::Config(format!(
+                "bounds given for `{n}`, which is not a controllable"
+            )));
         }
     }
     let y = &f.prepared.ty;
-    let y_range = y.iter().copied().fold(f64::NEG_INFINITY, f64::max) - y.iter().copied().fold(f64::INFINITY, f64::min);
+    let y_range = y.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        - y.iter().copied().fold(f64::INFINITY, f64::min);
     let tolerance = oc.tolerance * y_range.abs().max(1e-12);
     let out = optimize(&Problem {
         expr: &f.expr,
@@ -309,14 +383,19 @@ fn run_optimize(f: &Fitted, cfg: &RunConfig, goal: f64, seed: u64) -> Result<Opt
         seed,
     });
     let cnames: Vec<String> = controllables.iter().map(|&j| names[j].clone()).collect();
-    let by_ctrl = |vals: &[f64]| -> BTreeMap<String, f64> { cnames.iter().cloned().zip(vals.iter().copied()).collect() };
+    let by_ctrl = |vals: &[f64]| -> BTreeMap<String, f64> {
+        cnames.iter().cloned().zip(vals.iter().copied()).collect()
+    };
     let candidates = out
         .candidates
         .iter()
         .enumerate()
         .map(|(i, c)| CandidateReport {
             id: i + 1,
-            inputs: controllables.iter().map(|&j| (names[j].clone(), c.inputs[j])).collect(),
+            inputs: controllables
+                .iter()
+                .map(|&j| (names[j].clone(), c.inputs[j]))
+                .collect(),
             predicted: c.predicted,
             interval: c.interval,
             error: c.error,
@@ -324,7 +403,11 @@ fn run_optimize(f: &Fitted, cfg: &RunConfig, goal: f64, seed: u64) -> Result<Opt
             in_domain: c.domain.in_domain,
             domain_distance: c.domain.distance,
             change: by_ctrl(&c.change),
-            change_pct: cnames.iter().cloned().zip(c.change_pct.iter().copied()).collect(),
+            change_pct: cnames
+                .iter()
+                .cloned()
+                .zip(c.change_pct.iter().copied())
+                .collect(),
             sensitivity: by_ctrl(&c.sensitivity),
             elasticity: by_ctrl(&c.elasticity),
         })
@@ -349,7 +432,11 @@ fn run_optimize(f: &Fitted, cfg: &RunConfig, goal: f64, seed: u64) -> Result<Opt
         reached: out.reached,
         closest_value: out.closest_value,
         binding,
-        unused_controllables: out.unused_controllables.iter().map(|&j| names[j].clone()).collect(),
+        unused_controllables: out
+            .unused_controllables
+            .iter()
+            .map(|&j| names[j].clone())
+            .collect(),
         evaluations: out.evaluations,
         evidence: f.evidence,
         disclaimer: if interventional {
@@ -365,12 +452,14 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
     if cfg.targets.is_empty() {
         return Err(EngineError::Config("no target given; pass --target".into()));
     }
-    if let Some(g) = cfg.optimize.goal {
-        if !g.is_finite() {
-            return Err(EngineError::Config("goal must be a finite number".into()));
-        }
+    if let Some(g) = cfg.optimize.goal
+        && !g.is_finite()
+    {
+        return Err(EngineError::Config("goal must be a finite number".into()));
     }
-    let started_unix = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let started_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     let mut stages = Vec::new();
     let mut warnings = Vec::new();
     for e in &data.source.excluded {
@@ -381,16 +470,31 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
         });
     }
     let split = timed(&mut stages, "split", || {
-        Split::new(data.n_rows, cfg.split.train, cfg.split.val, cfg.split.strategy, cfg.seed)
+        Split::new(
+            data.n_rows,
+            cfg.split.train,
+            cfg.split.val,
+            cfg.split.strategy,
+            cfg.seed,
+        )
     })
     .map_err(|e| EngineError::Config(e.to_string()))?;
     if split.val.len() < 5 || split.test.len() < 5 {
-        return Err(EngineError::Data("too few rows for validation and test splits".into()));
+        return Err(EngineError::Data(
+            "too few rows for validation and test splits".into(),
+        ));
     }
 
     let mut fitted = Vec::new();
     for t in &cfg.targets {
-        fitted.push(fit_target(data, &split, t, cfg, &mut warnings, &mut stages)?);
+        fitted.push(fit_target(
+            data,
+            &split,
+            t,
+            cfg,
+            &mut warnings,
+            &mut stages,
+        )?);
     }
 
     let optimize = match cfg.optimize.goal {
@@ -403,7 +507,9 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
                     target: None,
                 });
             }
-            let o = timed(&mut stages, "optimize", || run_optimize(&fitted[0], cfg, goal, cfg.seed))?;
+            let o = timed(&mut stages, "optimize", || {
+                run_optimize(&fitted[0], cfg, goal, cfg.seed)
+            })?;
             if !o.unused_controllables.is_empty() {
                 warnings.push(Warning {
                     code: "unused_controllables".into(),
@@ -426,17 +532,32 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
     };
 
     let outcome = Outcome {
-        low_grade: fitted.iter().any(|f| f.report.validate.reliability.grade == Grade::Low),
+        low_grade: fitted
+            .iter()
+            .any(|f| f.report.validate.reliability.grade == Grade::Low),
         goal_missed: optimize.as_ref().is_some_and(|o| !o.reached),
     };
-    let interventional = fitted.iter().any(|f| f.evidence == Evidence::InterventionalFit);
-    let mut notes = vec![if interventional { text::INTERVENTIONAL_FIT_NOTE } else { text::OBSERVATIONAL_FIT_NOTE }.to_string()];
+    let interventional = fitted
+        .iter()
+        .any(|f| f.evidence == Evidence::InterventionalFit);
+    let mut notes = vec![
+        if interventional {
+            text::INTERVENTIONAL_FIT_NOTE
+        } else {
+            text::OBSERVATIONAL_FIT_NOTE
+        }
+        .to_string(),
+    ];
     notes.push(text::STABILITY_PENDING.into());
     let report = Report {
         schema_version: SCHEMA_VERSION.into(),
         tarafold_version: VERSION.into(),
         run: RunInfo {
-            id: format!("{}-{}", &data.source.sha256.get(..12).unwrap_or("nohash"), cfg.seed),
+            id: format!(
+                "{}-{}",
+                data.source.sha256.get(..12).unwrap_or("nohash"),
+                cfg.seed
+            ),
             started_unix,
             status: RunStatus::Completed,
             engine: "classical".into(),
@@ -466,13 +587,21 @@ mod tests {
 
     fn load(name: &str, rows: usize, noise: f64) -> Dataset {
         let g = generate(&find(name).unwrap(), rows, noise, 0, 1).unwrap();
-        read_csv(g.to_csv().unwrap().as_bytes(), name, &IngestOptions::default()).unwrap()
+        read_csv(
+            g.to_csv().unwrap().as_bytes(),
+            name,
+            &IngestOptions::default(),
+        )
+        .unwrap()
     }
 
     #[test]
     fn end_to_end_business_revenue() {
         let data = load("business-revenue", 800, 0.0);
-        let mut cfg = RunConfig { targets: vec!["revenue".into()], ..Default::default() };
+        let mut cfg = RunConfig {
+            targets: vec!["revenue".into()],
+            ..Default::default()
+        };
         cfg.optimize.goal = Some(50_000.0);
         cfg.optimize.controllables = vec!["orders".into(), "price".into()];
         let (report, outcome) = run(&data, &cfg).unwrap();
@@ -487,13 +616,21 @@ mod tests {
             let truth = c.inputs["orders"] * c.inputs["price"];
             assert!((truth - 50_000.0).abs() <= o.tolerance, "{truth}");
         }
-        assert!(report.to_json().unwrap().contains("\"schema_version\": \"0.1.0\""));
+        assert!(
+            report
+                .to_json()
+                .unwrap()
+                .contains("\"schema_version\": \"0.1.0\"")
+        );
     }
 
     #[test]
     fn deterministic_reports() {
         let data = load("cobb-douglas", 500, 0.05);
-        let mut cfg = RunConfig { targets: vec!["output".into()], ..Default::default() };
+        let mut cfg = RunConfig {
+            targets: vec!["output".into()],
+            ..Default::default()
+        };
         cfg.optimize.goal = Some(100.0);
         let strip = |mut r: Report| {
             r.run.started_unix = 0;
@@ -508,9 +645,15 @@ mod tests {
     #[test]
     fn config_errors() {
         let data = load("linear", 200, 0.0);
-        let cfg = RunConfig { targets: vec!["nope".into()], ..Default::default() };
+        let cfg = RunConfig {
+            targets: vec!["nope".into()],
+            ..Default::default()
+        };
         assert!(matches!(run(&data, &cfg), Err(EngineError::Config(_))));
-        let mut cfg = RunConfig { targets: vec!["y".into()], ..Default::default() };
+        let mut cfg = RunConfig {
+            targets: vec!["y".into()],
+            ..Default::default()
+        };
         cfg.optimize.goal = Some(1.0);
         cfg.optimize.controllables = vec!["zzz".into()];
         assert!(matches!(run(&data, &cfg), Err(EngineError::Config(_))));

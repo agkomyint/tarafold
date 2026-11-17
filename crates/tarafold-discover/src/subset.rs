@@ -37,7 +37,10 @@ fn gram(cols: &[&[f64]], y: &[f64]) -> Option<Gram> {
             g[j][i] = v;
         }
     }
-    let b: Vec<f64> = z.iter().map(|c| c.iter().zip(&yc).map(|(a, b)| a * b).sum()).collect();
+    let b: Vec<f64> = z
+        .iter()
+        .map(|c| c.iter().zip(&yc).map(|(a, b)| a * b).sum())
+        .collect();
     let yy: f64 = yc.iter().map(|v| v * v).sum();
     (yy > 0.0 && g.iter().flatten().all(|v| v.is_finite())).then_some(Gram { g, b, yy })
 }
@@ -45,9 +48,14 @@ fn gram(cols: &[&[f64]], y: &[f64]) -> Option<Gram> {
 impl Gram {
     /// Residual sum of squares for the least-squares fit on support `s` (plus intercept).
     fn rss(&self, s: &[usize]) -> f64 {
-        let m: Vec<Vec<f64>> = s.iter().map(|&i| s.iter().map(|&j| self.g[i][j]).collect()).collect();
+        let m: Vec<Vec<f64>> = s
+            .iter()
+            .map(|&i| s.iter().map(|&j| self.g[i][j]).collect())
+            .collect();
         let bs: Vec<f64> = s.iter().map(|&i| self.b[i]).collect();
-        let Some(l) = linalg::cholesky(&m) else { return f64::INFINITY };
+        let Some(l) = linalg::cholesky(&m) else {
+            return f64::INFINITY;
+        };
         // Reject numerically singular supports (pivot ratio below 1e-6 → condition > 1e12).
         let d: Vec<f64> = (0..s.len()).map(|i| l[i][i]).collect();
         let dmax = d.iter().copied().fold(0.0, f64::max);
@@ -64,7 +72,9 @@ impl Gram {
 /// size from exhaustive search over pairs (≤ 400 terms) and triples (≤ 80 terms).
 pub(crate) fn supports(cols: &[&[f64]], y: &[f64], max_k: usize) -> Vec<Vec<usize>> {
     let p = cols.len();
-    let Some(gr) = gram(cols, y) else { return Vec::new() };
+    let Some(gr) = gram(cols, y) else {
+        return Vec::new();
+    };
     let mut out: BTreeSet<Vec<usize>> = BTreeSet::new();
 
     // Forward selection.

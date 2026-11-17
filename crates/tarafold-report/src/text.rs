@@ -25,8 +25,14 @@ pub const STABILITY_PENDING: &str = "Structural stability is not computed in thi
 reliability grade is at most `medium`.";
 
 /// Phrases that must never appear in observational wording.
-pub const BANNED_CAUSAL_PHRASES: [&str; 6] =
-    ["causes", "caused by", "drives", "will increase", "will decrease", "leads to"];
+pub const BANNED_CAUSAL_PHRASES: [&str; 6] = [
+    "causes",
+    "caused by",
+    "drives",
+    "will increase",
+    "will decrease",
+    "leads to",
+];
 
 #[cfg(test)]
 mod tests {
@@ -34,7 +40,11 @@ mod tests {
 
     #[test]
     fn observational_text_has_no_causal_claims() {
-        for t in [OBSERVATIONAL_FIT_NOTE, OBSERVATIONAL_OPTIMIZE_DISCLAIMER, STABILITY_PENDING] {
+        for t in [
+            OBSERVATIONAL_FIT_NOTE,
+            OBSERVATIONAL_OPTIMIZE_DISCLAIMER,
+            STABILITY_PENDING,
+        ] {
             let lower = t.to_lowercase();
             for p in BANNED_CAUSAL_PHRASES {
                 assert!(!lower.contains(p), "banned phrase `{p}` in: {t}");

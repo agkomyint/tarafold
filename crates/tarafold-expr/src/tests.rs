@@ -12,9 +12,19 @@ fn eval_and_protected_ops() {
     let e = parse("2*x + y^2 - log(x)", &n).unwrap();
     let v = e.eval_point(&[1.0, 3.0]);
     assert!((v - 11.0).abs() < 1e-12);
-    assert!(parse("log(x)", &n).unwrap().eval_point(&[-1.0, 0.0]).is_nan());
+    assert!(
+        parse("log(x)", &n)
+            .unwrap()
+            .eval_point(&[-1.0, 0.0])
+            .is_nan()
+    );
     assert!(parse("x / y", &n).unwrap().eval_point(&[1.0, 0.0]).is_nan());
-    assert!(parse("x ^ 0.5", &n).unwrap().eval_point(&[-4.0, 0.0]).is_nan());
+    assert!(
+        parse("x ^ 0.5", &n)
+            .unwrap()
+            .eval_point(&[-4.0, 0.0])
+            .is_nan()
+    );
     assert_eq!(parse("x ^ 2", &n).unwrap().eval_point(&[-3.0, 0.0]), 9.0);
     let cols = e.eval_columns(&[&[1.0, 2.0], &[3.0, 1.0]], 2).unwrap();
     assert!((cols[0] - 11.0).abs() < 1e-12);
@@ -44,7 +54,10 @@ fn print_examples() {
     let e = parse("orders * price", &n).unwrap();
     assert_eq!(e.to_infix(&n), "orders * price");
     let e = parse("2.5 * `Marketing Spend` ^ 0.7 - (price - 1)", &n).unwrap();
-    assert_eq!(e.to_infix_pretty(&n, 4), "2.5 * `Marketing Spend`^0.7 - (price - 1)");
+    assert_eq!(
+        e.to_infix_pretty(&n, 4),
+        "2.5 * `Marketing Spend`^0.7 - (price - 1)"
+    );
     assert!(e.to_latex(&n, 4).contains("\\mathrm{Marketing\\ Spend}"));
 }
 
@@ -58,7 +71,15 @@ fn random_expr(r: &mut Rng, depth: usize, n_vars: u16) -> Expr {
         };
     }
     if r.uniform() < 0.3 {
-        let ops = [UnOp::Neg, UnOp::Exp, UnOp::Log, UnOp::Sqrt, UnOp::Square, UnOp::Abs, UnOp::Inv];
+        let ops = [
+            UnOp::Neg,
+            UnOp::Exp,
+            UnOp::Log,
+            UnOp::Sqrt,
+            UnOp::Square,
+            UnOp::Abs,
+            UnOp::Inv,
+        ];
         let a = random_expr(r, depth - 1, n_vars);
         // Parser folds `-const` into a negative constant; mirror that.
         let op = ops[r.below(ops.len())];
@@ -101,7 +122,8 @@ fn derivatives_match_finite_differences() {
             xp[var as usize] += h;
             xm[var as usize] -= h;
             let fd = (e.eval_point(&xp) - e.eval_point(&xm)) / (2.0 * h);
-            if !(v.is_finite() && d.is_finite() && fd.is_finite()) || v.abs() > 1e6 || d.abs() > 1e6 {
+            if !(v.is_finite() && d.is_finite() && fd.is_finite()) || v.abs() > 1e6 || d.abs() > 1e6
+            {
                 continue;
             }
             assert!(

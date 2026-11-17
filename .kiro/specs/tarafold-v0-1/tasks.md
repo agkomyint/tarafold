@@ -11,7 +11,7 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
 
 ## Phase 0 — Repository foundation
 
-- [ ] 0.1 Create the Cargo workspace with all crates from design §2 as empty libraries plus the `tarafold` binary in `tarafold-cli`. Set edition 2024, `rust-version = "1.99"`, `license = "Apache-2.0"`, shared `[workspace.lints]`, release profile from design §11.
+- [x] 0.1 Create the Cargo workspace with all crates from design §2 as empty libraries plus the `tarafold` binary in `tarafold-cli`. Set edition 2024, `rust-version = "1.99"`, `license = "Apache-2.0"`, shared `[workspace.lints]`, release profile from design §11.
   - Done when: `cargo build --workspace` and `cargo run -p tarafold-cli -- --version` work. _R1.4, R15.1_
 - [ ] 0.2 Add `deny.toml`, `rustfmt.toml`, and verify `.github/workflows/ci.yml` runs green on all three OSes.
   - Done when: CI passes on a PR. _R14.5, R15.3_
@@ -20,23 +20,24 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
 
 ## Phase 1 — Walking skeleton (end to end, minimal)
 
-- [ ] 1.1 `tarafold-core`: `Dataset`, `Column`, `Split` (random + ordered), `RunConfig` with defaults + TOML load/merge, `Evidence`, error types, seeded RNG helper.
+- [x] 1.1 `tarafold-core`: `Dataset`, `Column`, `Split` (random + ordered), `RunConfig` with defaults + TOML load/merge, `Evidence`, error types, seeded RNG helper.
   - Done when: unit tests cover config precedence and split reproducibility. _R2.3, R7.1_
-- [ ] 1.2 `tarafold-io`: CSV ingest with delimiter/decimal sniffing, missing tokens, numeric detection, exclusions with reasons, limits, SHA-256.
+- [x] 1.2 `tarafold-io`: CSV ingest with delimiter/decimal sniffing, missing tokens, numeric detection, exclusions with reasons, limits, SHA-256.
   - Done when: tests cover `;` + decimal comma files, mixed columns, limits, < 30 rows error, stdin input (`-`), and invalid weight columns. _R3.1–R3.10_
 - [ ] 1.3 `tarafold-expr`: postfix `Expr`, chunked deterministic evaluator, protected ops, infix/LaTeX/JSON printing, Pratt parser.
   - Done when: proptest `parse(print(e)) == e` passes; golden vectors file exists. _R6.5, R6.8_
-- [ ] 1.4 `tarafold-synth`: registry with 6 seed equations (one each from T1, T2, T4, T5, T6, T8) and generator writing CSV + `truth.json`; `tarafold synth`.
+- [x] 1.4 `tarafold-synth`: registry with 6 seed equations (one each from T1, T2, T4, T5, T6, T8) and generator writing CSV + `truth.json`; `tarafold synth`.
   - Done when: `tarafold synth business-revenue --rows 2000 --out d` writes both files reproducibly. _R11.1_
-- [ ] 1.5 `tarafold-discover` (5a only): basis library, elastic-net path, OLS refit, log-log and log-target variants, Pareto front, selection rule.
+- [x] 1.5 `tarafold-discover` (5a only): basis library, elastic-net path, OLS refit, log-log and log-target variants, Pareto front, selection rule.
   - Done when: noiseless T1, T4, and T8 revenue are recovered symbolically. _R6.1, R6.4, R6.7_
-- [ ] 1.6 `tarafold-validate` (minimal): R², RMSE, MAE, NRMSE on all splits; applicability domain (ranges + Mahalanobis).
+- [x] 1.6 `tarafold-validate` (minimal): R², RMSE, MAE, NRMSE on all splits; applicability domain (ranges + Mahalanobis).
   - Done when: metrics match a reference implementation within 1e-12 on fixtures. _R7.2, R7.8_
-- [ ] 1.7 `tarafold-optimize` (minimal): bounds, fixed non-controllables at medians, 1-D Brent roots, DE for d > 1, feasibility check, top-N by error.
+- [x] 1.7 `tarafold-optimize` (minimal): bounds, fixed non-controllables at medians, 1-D Brent roots, DE for d > 1, feasibility check, top-N by error.
   - Done when: on T8 revenue, candidates evaluated with the true function are within 1% of goal. _R8.1, R8.2, R8.4_
 - [ ] 1.8 `tarafold-report` + `tarafold-engine`: report types with `schemars` (using the `targets[]` shape and top-level `optimize`/`suggest` sections from the start, even with one target and one goal), pipeline wiring of stages 1, 3, 5a, 6, 7, JSON writer, `equations.csv`, `candidates.csv`, `run.toml`.
   - Done when: `tarafold schema` prints a schema that validates the produced report. _R10.1, R2.5_
-- [ ] 1.9 `tarafold-cli`: `run` with flags from design §7 (subset: target, goal, control, bounds, seed, out, format), human summary, JSON mode, exit codes.
+  - Status: report types, schema, JSON/CSV/run.toml outputs done. Automated validation of report.json against the schema still to do.
+- [x] 1.9 `tarafold-cli`: `run` with flags from design §7 (subset: target, goal, control, bounds, seed, out, format), human summary, JSON mode, exit codes.
   - Done when: `assert_cmd` integration test runs synth → run end to end and checks files and exit codes. _R2.1, R2.2, R2.6, R2.7_
 
 **Milestone M1:** `tarafold synth` → `tarafold run --goal` works end to end on business data.

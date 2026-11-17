@@ -28,7 +28,13 @@ pub struct Metrics {
 pub fn metrics(pred: &[f64], y: &[f64]) -> Metrics {
     let n = y.len().min(pred.len());
     if n == 0 || pred[..n].iter().any(|p| !p.is_finite()) {
-        return Metrics { r2: f64::NAN, rmse: f64::NAN, mae: f64::NAN, nrmse: f64::NAN, n };
+        return Metrics {
+            r2: f64::NAN,
+            rmse: f64::NAN,
+            mae: f64::NAN,
+            nrmse: f64::NAN,
+            n,
+        };
     }
     let sse: f64 = (0..n).map(|i| (pred[i] - y[i]).powi(2)).sum();
     let sae: f64 = (0..n).map(|i| (pred[i] - y[i]).abs()).sum();
@@ -48,7 +54,9 @@ pub fn metrics(pred: &[f64], y: &[f64]) -> Metrics {
 /// Evaluate an expression on column-major features and score it.
 pub fn score(expr: &Expr, x: &[Vec<f64>], y: &[f64]) -> (Metrics, Vec<f64>) {
     let refs: Vec<&[f64]> = x.iter().map(Vec::as_slice).collect();
-    let pred = expr.eval_columns(&refs, y.len()).unwrap_or_else(|| vec![f64::NAN; y.len()]);
+    let pred = expr
+        .eval_columns(&refs, y.len())
+        .unwrap_or_else(|| vec![f64::NAN; y.len()]);
     (metrics(&pred, y), pred)
 }
 
@@ -94,7 +102,11 @@ impl Domain {
         let std: Vec<f64> = x.iter().map(|c| stats::std(c)).collect();
         // Covariance of standardized features, ridge-regularized.
         let z: Vec<Vec<f64>> = (0..p)
-            .map(|j| x[j].iter().map(|v| (v - mean[j]) / std[j].max(1e-300)).collect())
+            .map(|j| {
+                x[j].iter()
+                    .map(|v| (v - mean[j]) / std[j].max(1e-300))
+                    .collect()
+            })
             .collect();
         let mut cov = vec![vec![0.0; p]; p];
         for i in 0..p {
@@ -106,20 +118,29 @@ impl Domain {
             cov[i][i] += 1e-6;
         }
         let chol = linalg::cholesky(&cov).unwrap_or_else(|| {
-            (0..p).map(|i| (0..p).map(|j| if i == j { 1.0 } else { 0.0 }).collect()).collect()
+            (0..p)
+                .map(|i| (0..p).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
+                .collect()
         });
         let mut d = Self {
             names: names.to_vec(),
-            min: x.iter().map(|c| c.iter().copied().fold(f64::INFINITY, f64::min)).collect(),
-            max: x.iter().map(|c| c.iter().copied().fold(f64::NEG_INFINITY, f64::max)).collect(),
+            min: x
+                .iter()
+                .map(|c| c.iter().copied().fold(f64::INFINITY, f64::min))
+                .collect(),
+            max: x
+                .iter()
+                .map(|c| c.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+                .collect(),
             median: x.iter().map(|c| stats::median(c)).collect(),
             mean,
             std,
             threshold: f64::INFINITY,
             chol,
         };
-        let dists: Vec<f64> =
-            (0..n).map(|k| d.distance(&(0..p).map(|j| x[j][k]).collect::<Vec<_>>())).collect();
+        let dists: Vec<f64> = (0..n)
+            .map(|k| d.distance(&(0..p).map(|j| x[j][k]).collect::<Vec<_>>()))
+            .collect();
         d.threshold = stats::quantile(&dists, 0.99);
         d
     }
@@ -132,7 +153,12 @@ impl Domain {
             .map(|(j, v)| (v - self.mean[j]) / self.std[j].max(1e-300))
             .collect();
         let w = linalg::cholesky_solve(&self.chol, &zs);
-        zs.iter().zip(&w).map(|(a, b)| a * b).sum::<f64>().max(0.0).sqrt()
+        zs.iter()
+            .zip(&w)
+            .map(|(a, b)| a * b)
+            .sum::<f64>()
+            .max(0.0)
+            .sqrt()
     }
 
     /// Check a point.
@@ -143,12 +169,18 @@ impl Domain {
             .enumerate()
             .all(|(j, v)| *v >= self.min[j] - tol(j) && *v <= self.max[j] + tol(j));
         let distance = self.distance(point);
-        DomainCheck { in_ranges, distance, in_domain: in_ranges && distance <= self.threshold }
+        DomainCheck {
+            in_ranges,
+            distance,
+            in_domain: in_ranges && distance <= self.threshold,
+        }
     }
 }
 
 /// Reliability grade (R7.7).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Grade {
     /// Do not rely on this equation.
@@ -199,12 +231,32 @@ pub struct GradeInputs {
 /// Apply the grading rule in design §5 (Stage 6). Unknown inputs count as not passed for
 /// `high`, so the grade is capped at `medium` until they are computed.
 pub fn grade(g: &GradeInputs) -> Reliability {
-    let c = |id: &str, condition: String, passed: Option<bool>| Check { id: id.into(), condition, passed };
+    let c = |id: &str, condition: String, passed: Option<bool>| Check {
+        id: id.into(),
+        condition,
+        passed,
+    };
     let checks = vec![
-        c("test_r2_high", "test R² ≥ 0.95".into(), Some(g.test_r2 >= 0.95)),
-        c("test_r2_medium", "test R² ≥ 0.80".into(), Some(g.test_r2 >= 0.80)),
-        c("stability_high", "structural stability ≥ 0.7".into(), g.stability.map(|s| s >= 0.7)),
-        c("stability_medium", "structural stability ≥ 0.4".into(), g.stability.map(|s| s >= 0.4)),
+        c(
+            "test_r2_high",
+            "test R² ≥ 0.95".into(),
+            Some(g.test_r2 >= 0.95),
+        ),
+        c(
+            "test_r2_medium",
+            "test R² ≥ 0.80".into(),
+            Some(g.test_r2 >= 0.80),
+        ),
+        c(
+            "stability_high",
+            "structural stability ≥ 0.7".into(),
+            g.stability.map(|s| s >= 0.7),
+        ),
+        c(
+            "stability_medium",
+            "structural stability ≥ 0.4".into(),
+            g.stability.map(|s| s >= 0.4),
+        ),
         c(
             "baseline",
             "test R² within 0.02 of the best baseline model".into(),
@@ -212,16 +264,30 @@ pub fn grade(g: &GradeInputs) -> Reliability {
         ),
         c(
             "sample_size",
-            format!("training rows ≥ 20 × constants ({} ≥ {})", g.n_train, 20 * g.n_constants),
+            format!(
+                "training rows ≥ 20 × constants ({} ≥ {})",
+                g.n_train,
+                20 * g.n_constants
+            ),
             Some(g.n_train >= 20 * g.n_constants),
         ),
-        c("no_leakage", "no target-leakage suspect among used variables".into(), Some(!g.leakage)),
+        c(
+            "no_leakage",
+            "no target-leakage suspect among used variables".into(),
+            Some(!g.leakage),
+        ),
     ];
     let ok = |id: &str| checks.iter().any(|k| k.id == id && k.passed == Some(true));
     let not_failed = |id: &str| checks.iter().any(|k| k.id == id && k.passed != Some(false));
-    let grade = if ["test_r2_high", "stability_high", "baseline", "sample_size", "no_leakage"]
-        .iter()
-        .all(|id| ok(id))
+    let grade = if [
+        "test_r2_high",
+        "stability_high",
+        "baseline",
+        "sample_size",
+        "no_leakage",
+    ]
+    .iter()
+    .all(|id| ok(id))
     {
         Grade::High
     } else if ok("test_r2_medium") && not_failed("stability_medium") {
@@ -234,7 +300,12 @@ pub fn grade(g: &GradeInputs) -> Reliability {
 
 /// Evidence level (R9.1, R9.4). `designed_controls` is true when every controllable is a
 /// designed column of experimental or simulation data.
-pub fn evidence(test_r2: f64, grade: Grade, source: DataSource, designed_controls: bool) -> Evidence {
+pub fn evidence(
+    test_r2: f64,
+    grade: Grade,
+    source: DataSource,
+    designed_controls: bool,
+) -> Evidence {
     if grade >= Grade::Medium {
         if source != DataSource::Observational && designed_controls {
             Evidence::InterventionalFit
@@ -251,7 +322,11 @@ pub fn evidence(test_r2: f64, grade: Grade, source: DataSource, designed_control
 /// Symmetric prediction half-width from validation residuals: the `level` quantile of
 /// |residual|. Used until bootstrap ensembles exist (Phase 5).
 pub fn residual_halfwidth(val_pred: &[f64], val_y: &[f64], level: f64) -> f64 {
-    let abs: Vec<f64> = val_pred.iter().zip(val_y).map(|(p, y)| (p - y).abs()).collect();
+    let abs: Vec<f64> = val_pred
+        .iter()
+        .zip(val_y)
+        .map(|(p, y)| (p - y).abs())
+        .collect();
     stats::quantile(&abs, level)
 }
 
@@ -270,7 +345,12 @@ mod tests {
 
     #[test]
     fn domain_flags_far_points() {
-        let x = vec![(0..200).map(f64::from).collect::<Vec<_>>(), (0..200).map(|i| f64::from(i) * 2.0 + f64::from(i % 7)).collect()];
+        let x = vec![
+            (0..200).map(f64::from).collect::<Vec<_>>(),
+            (0..200)
+                .map(|i| f64::from(i) * 2.0 + f64::from(i % 7))
+                .collect(),
+        ];
         let d = Domain::fit(&["a".into(), "b".into()], &x);
         assert!(d.check(&[100.0, 203.0]).in_domain);
         assert!(!d.check(&[500.0, 10.0]).in_ranges);
@@ -281,7 +361,12 @@ mod tests {
 
     #[test]
     fn grade_capped_without_stability() {
-        let g = grade(&GradeInputs { test_r2: 0.999, n_train: 600, n_constants: 2, ..Default::default() });
+        let g = grade(&GradeInputs {
+            test_r2: 0.999,
+            n_train: 600,
+            n_constants: 2,
+            ..Default::default()
+        });
         assert_eq!(g.grade, Grade::Medium);
         let g = grade(&GradeInputs {
             test_r2: 0.999,
@@ -292,14 +377,33 @@ mod tests {
             leakage: false,
         });
         assert_eq!(g.grade, Grade::High);
-        assert_eq!(grade(&GradeInputs { test_r2: 0.3, ..Default::default() }).grade, Grade::Low);
+        assert_eq!(
+            grade(&GradeInputs {
+                test_r2: 0.3,
+                ..Default::default()
+            })
+            .grade,
+            Grade::Low
+        );
     }
 
     #[test]
     fn evidence_levels() {
-        assert_eq!(evidence(0.99, Grade::Medium, DataSource::Observational, true), Evidence::FunctionalFit);
-        assert_eq!(evidence(0.99, Grade::Medium, DataSource::Simulation, true), Evidence::InterventionalFit);
-        assert_eq!(evidence(0.99, Grade::Medium, DataSource::Experimental, false), Evidence::FunctionalFit);
-        assert_eq!(evidence(0.6, Grade::Low, DataSource::Simulation, true), Evidence::Predictive);
+        assert_eq!(
+            evidence(0.99, Grade::Medium, DataSource::Observational, true),
+            Evidence::FunctionalFit
+        );
+        assert_eq!(
+            evidence(0.99, Grade::Medium, DataSource::Simulation, true),
+            Evidence::InterventionalFit
+        );
+        assert_eq!(
+            evidence(0.99, Grade::Medium, DataSource::Experimental, false),
+            Evidence::FunctionalFit
+        );
+        assert_eq!(
+            evidence(0.6, Grade::Low, DataSource::Simulation, true),
+            Evidence::Predictive
+        );
     }
 }

@@ -46,6 +46,8 @@ unsafe_code = "forbid"
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+# Numeric kernels index several arrays in lockstep; iterator rewrites hurt clarity there.
+needless_range_loop = "allow"
 
 [profile.release]
 lto = "fat"

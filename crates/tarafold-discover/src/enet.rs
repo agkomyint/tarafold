@@ -41,17 +41,20 @@ pub(crate) fn supports(
         .collect();
     let ym = stats::mean(y);
     let ys = stats::std(y);
-    if !(ys > 0.0) {
+    if ys.is_nan() || ys <= 0.0 {
         return Vec::new();
     }
     let yc: Vec<f64> = y.iter().map(|v| (v - ym) / ys).collect();
-    let zy: Vec<f64> = z.iter().map(|c| c.iter().zip(&yc).map(|(a, b)| a * b).sum::<f64>() / nf).collect();
+    let zy: Vec<f64> = z
+        .iter()
+        .map(|c| c.iter().zip(&yc).map(|(a, b)| a * b).sum::<f64>() / nf)
+        .collect();
 
     let mut seen: BTreeSet<Vec<usize>> = BTreeSet::new();
     let mut out: Vec<Vec<usize>> = Vec::new();
     for &alpha in alphas {
         let lambda_max = zy.iter().map(|v| v.abs()).fold(0.0, f64::max) / alpha;
-        if !(lambda_max > 0.0) {
+        if lambda_max.is_nan() || lambda_max <= 0.0 {
             continue;
         }
         let mut beta = vec![0.0; p];

@@ -72,7 +72,11 @@ pub(crate) fn is_plain_ident(name: &str) -> bool {
 }
 
 fn fmt_ident(name: &str) -> String {
-    if is_plain_ident(name) { name.to_string() } else { format!("`{}`", name.replace('`', "")) }
+    if is_plain_ident(name) {
+        name.to_string()
+    } else {
+        format!("`{}`", name.replace('`', ""))
+    }
 }
 
 /// Shortest round-trip representation (`{:?}` gives e.g. `2.5`, `3.0`, `1e-7`).
@@ -91,7 +95,11 @@ pub(crate) fn fmt_sig(c: f64, sig: usize) -> String {
     }
     let decimals = (sig as i32 - 1 - mag).max(0) as usize;
     let s = format!("{c:.decimals$}");
-    if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s }
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    }
 }
 
 impl Expr {
@@ -101,11 +109,18 @@ impl Expr {
         for node in &self.nodes {
             match *node {
                 Node::Const(c) => {
-                    let p = if c.is_sign_negative() { PREC_NEG } else { PREC_ATOM };
+                    let p = if c.is_sign_negative() {
+                        PREC_NEG
+                    } else {
+                        PREC_ATOM
+                    };
                     stack.push((fmt_c(c), p));
                 }
                 Node::Var(i) => {
-                    let name = names.get(i as usize).cloned().unwrap_or_else(|| format!("x{i}"));
+                    let name = names
+                        .get(i as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("x{i}"));
                     stack.push((fmt_ident(&name), PREC_ATOM));
                 }
                 Node::Unary(op) => {
@@ -121,8 +136,11 @@ impl Expr {
                     let (b, pb) = stack.pop().unwrap_or_default();
                     let (a, pa) = stack.pop().unwrap_or_default();
                     let p = bin_prec(op);
-                    let (left_paren, right_paren) =
-                        if op == BinOp::Pow { (pa <= p, pb < p) } else { (pa < p, pb <= p) };
+                    let (left_paren, right_paren) = if op == BinOp::Pow {
+                        (pa <= p, pb < p)
+                    } else {
+                        (pa < p, pb <= p)
+                    };
                     let a = if left_paren { format!("({a})") } else { a };
                     let b = if right_paren { format!("({b})") } else { b };
                     let text = if op == BinOp::Pow {
@@ -160,23 +178,38 @@ impl Expr {
                     } else {
                         s
                     };
-                    stack.push((s, if c.is_sign_negative() { PREC_NEG } else { PREC_ATOM }));
+                    stack.push((
+                        s,
+                        if c.is_sign_negative() {
+                            PREC_NEG
+                        } else {
+                            PREC_ATOM
+                        },
+                    ));
                 }
                 Node::Var(i) => {
-                    let name = names.get(i as usize).cloned().unwrap_or_else(|| format!("x{i}"));
-                    let esc = name.replace('\\', "").replace('_', "\\_").replace(' ', "\\ ");
+                    let name = names
+                        .get(i as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("x{i}"));
+                    let esc = name
+                        .replace('\\', "")
+                        .replace('_', "\\_")
+                        .replace(' ', "\\ ");
                     stack.push((format!("\\mathrm{{{esc}}}"), PREC_ATOM));
                 }
                 Node::Unary(op) => {
                     let (a, pa) = stack.pop().unwrap_or_default();
                     let out = match op {
-                        UnOp::Neg => {
-                            (format!("-{}", if pa <= PREC_NEG { paren(a) } else { a }), PREC_NEG)
-                        }
+                        UnOp::Neg => (
+                            format!("-{}", if pa <= PREC_NEG { paren(a) } else { a }),
+                            PREC_NEG,
+                        ),
                         UnOp::Sqrt => (format!("\\sqrt{{{a}}}"), PREC_ATOM),
-                        UnOp::Square => {
-                            (format!("{}^{{2}}", if pa < PREC_ATOM { paren(a) } else { a }), PREC_POW)
-                        }
+                        UnOp::Square => (
+                            format!("{}^{{2}}", if pa < PREC_ATOM { paren(a) } else { a }),
+                            PREC_POW,
+                        ),
                         UnOp::Abs => (format!("\\left|{a}\\right|"), PREC_ATOM),
                         UnOp::Inv => (format!("\\frac{{1}}{{{a}}}"), PREC_ATOM),
                         UnOp::Exp => (format!("e^{{{a}}}"), PREC_POW),
@@ -222,16 +255,25 @@ impl Expr {
             match *node {
                 Node::Const(c) => stack.push(Tree::Const { value: c }),
                 Node::Var(i) => stack.push(Tree::Var {
-                    var: names.get(i as usize).cloned().unwrap_or_else(|| format!("x{i}")),
+                    var: names
+                        .get(i as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("x{i}")),
                 }),
                 Node::Unary(op) => {
                     let a = stack.pop().unwrap_or(Tree::Const { value: f64::NAN });
-                    stack.push(Tree::Op { op: op.name().into(), args: vec![a] });
+                    stack.push(Tree::Op {
+                        op: op.name().into(),
+                        args: vec![a],
+                    });
                 }
                 Node::Binary(op) => {
                     let b = stack.pop().unwrap_or(Tree::Const { value: f64::NAN });
                     let a = stack.pop().unwrap_or(Tree::Const { value: f64::NAN });
-                    stack.push(Tree::Op { op: bin_name(op).into(), args: vec![a, b] });
+                    stack.push(Tree::Op {
+                        op: bin_name(op).into(),
+                        args: vec![a, b],
+                    });
                 }
             }
         }

@@ -37,12 +37,21 @@ pub(crate) fn library(
     let full = |j: usize| -> Vec<f64> { train[j].iter().chain(&check[j]).copied().collect() };
     let mut push = |expr: Expr, keep: bool, log_of: Option<u16>| {
         let refs: Vec<&[f64]> = train.iter().map(Vec::as_slice).collect();
-        let Some(v) = expr.eval_columns(&refs, n) else { return };
+        let Some(v) = expr.eval_columns(&refs, n) else {
+            return;
+        };
         let crefs: Vec<&[f64]> = check.iter().map(Vec::as_slice).collect();
         let m = check.first().map_or(0, Vec::len);
         let ok_check = m == 0 || expr.eval_columns(&crefs, m).is_some_and(|c| all_finite(&c));
         if all_finite(&v) && ok_check && stats::std(&v) > 0.0 {
-            out.push((Term { expr, train: v, log_of }, keep));
+            out.push((
+                Term {
+                    expr,
+                    train: v,
+                    log_of,
+                },
+                keep,
+            ));
         }
     };
     for j in 0..p {
@@ -64,7 +73,7 @@ pub(crate) fn library(
     }
     for i in 0..p {
         for j in (i + 1)..p {
-            push(Expr::mul(Expr::var(i as u16), Expr::var(j as u16)), false, None);
+            push(Expr::var(i as u16) * Expr::var(j as u16), false, None);
         }
     }
     // Degree-3 monomials: x_i^2 * x_j and x_i * x_j * x_k (e.g. m * v^2).
@@ -72,7 +81,7 @@ pub(crate) fn library(
         for j in 0..p {
             if i != j {
                 push(
-                    Expr::mul(Expr::var(i as u16), Expr::var(j as u16).unary(UnOp::Square)),
+                    Expr::var(i as u16) * Expr::var(j as u16).unary(UnOp::Square),
                     false,
                     None,
                 );
@@ -82,7 +91,7 @@ pub(crate) fn library(
     for i in 0..p {
         for j in (i + 1)..p {
             for k in (j + 1)..p {
-                let e = Expr::mul(Expr::mul(Expr::var(i as u16), Expr::var(j as u16)), Expr::var(k as u16));
+                let e = Expr::var(i as u16) * Expr::var(j as u16) * Expr::var(k as u16);
                 push(e, false, None);
             }
         }
@@ -90,7 +99,11 @@ pub(crate) fn library(
     for i in 0..p {
         for j in 0..p {
             if i != j && away_from_zero(&full(j)) {
-                push(Expr::binary(BinOp::Div, Expr::var(i as u16), Expr::var(j as u16)), false, None);
+                push(
+                    Expr::binary(BinOp::Div, Expr::var(i as u16), Expr::var(j as u16)),
+                    false,
+                    None,
+                );
             }
         }
     }
@@ -102,7 +115,16 @@ pub(crate) fn library(
         .enumerate()
         .map(|(i, (t, keep))| {
             let unary = t.expr.variables().len() == 1;
-            (if *keep { 3.0 } else if unary { 2.0 } else { stats::pearson(&t.train, y).abs() }, i)
+            (
+                if *keep {
+                    3.0
+                } else if unary {
+                    2.0
+                } else {
+                    stats::pearson(&t.train, y).abs()
+                },
+                i,
+            )
         })
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -113,7 +135,10 @@ pub(crate) fn library(
     let mut terms: Vec<Term> = Vec::new();
     for i in chosen {
         let t = &out[i].0;
-        if terms.iter().all(|u| stats::pearson(&u.train, &t.train).abs() < 0.99999) {
+        if terms
+            .iter()
+            .all(|u| stats::pearson(&u.train, &t.train).abs() < 0.99999)
+        {
             terms.push(t.clone());
         }
     }

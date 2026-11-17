@@ -49,7 +49,12 @@ impl Split {
         let n_val = n_val.min(n.saturating_sub(n_train));
         let test = idx.split_off(n_train + n_val);
         let val_rows = idx.split_off(n_train);
-        let mut s = Self { train: idx, val: val_rows, test, strategy };
+        let mut s = Self {
+            train: idx,
+            val: val_rows,
+            test,
+            strategy,
+        };
         if strategy == SplitStrategy::Random {
             s.train.sort_unstable();
             s.val.sort_unstable();
@@ -69,7 +74,13 @@ mod tests {
         let b = Split::new(1000, 0.6, 0.2, SplitStrategy::Random, 9).unwrap();
         assert_eq!(a, b);
         assert_eq!((a.train.len(), a.val.len(), a.test.len()), (600, 200, 200));
-        let mut all: Vec<u32> = a.train.iter().chain(&a.val).chain(&a.test).copied().collect();
+        let mut all: Vec<u32> = a
+            .train
+            .iter()
+            .chain(&a.val)
+            .chain(&a.test)
+            .copied()
+            .collect();
         all.sort_unstable();
         all.dedup();
         assert_eq!(all.len(), 1000);

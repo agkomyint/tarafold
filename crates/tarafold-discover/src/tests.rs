@@ -24,8 +24,14 @@ fn run(name: &str, rows: usize, noise: f64, distractors: usize) -> Outcome {
     let vy = pick(&split.val, p);
     let sy = pick(&split.test, p);
     let cfg = DiscoverConfig::default();
-    let out = discover(&DiscoverInput { train_x: &tx, train_y: &ty, val_x: &vx, val_y: &vy, config: &cfg })
-        .unwrap();
+    let out = discover(&DiscoverInput {
+        train_x: &tx,
+        train_y: &ty,
+        val_x: &vx,
+        val_y: &vy,
+        config: &cfg,
+    })
+    .unwrap();
     let sel = &out.front[out.selected];
     let truth = parse(&g.truth.equation, &g.truth.features).unwrap();
     // Numeric equivalence against the noiseless truth on test rows.
@@ -66,12 +72,21 @@ fn recovers_other_basis_expressible_forms() {
         assert!(o.equivalent, "{name}: found {}", o.equation);
     }
     let o = run("interaction", 600, 0.0, 5);
-    assert!(o.equivalent, "interaction with distractors: found {}", o.equation);
+    assert!(
+        o.equivalent,
+        "interaction with distractors: found {}",
+        o.equation
+    );
 }
 
 #[test]
 fn noisy_data_stays_accurate() {
-    for name in ["linear", "cobb-douglas", "business-revenue", "kinetic-energy"] {
+    for name in [
+        "linear",
+        "cobb-douglas",
+        "business-revenue",
+        "kinetic-energy",
+    ] {
         let o = run(name, 600, 0.1, 0);
         // Noise std 0.1 × std(y) means the best possible NMSE is about 0.01.
         assert!(o.test_nmse < 0.02, "{name}: test NMSE {}", o.test_nmse);
