@@ -63,6 +63,21 @@ fn synth_then_run_end_to_end() {
             .unwrap()
             .contains("goal = 50000.0")
     );
+
+    // report.json validates against the schema printed by `tarafold schema` (R10.1).
+    let schema_out = tarafold().arg("schema").assert().success();
+    let schema: serde_json::Value =
+        serde_json::from_slice(&schema_out.get_output().stdout).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let errors: Vec<String> = validator
+        .iter_errors(&report)
+        .map(|e| format!("{e} at {}", e.instance_path()))
+        .take(10)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "report.json does not match its schema: {errors:#?}"
+    );
 }
 
 #[test]

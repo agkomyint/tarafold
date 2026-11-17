@@ -183,3 +183,106 @@ fn subtree_editing() {
         }
     }
 }
+
+#[test]
+fn simplify_rules_read_well() {
+    let n = names(&["x1", "x2"]);
+    let cases = [
+        ("x1 * inv(x2 + 1)", "x1 / (x2 + 1.0)"),
+        ("inv(x2) * x1", "x1 / x2"),
+        ("x1 + -(x2)", "x1 - x2"),
+        ("x1 - -(x2)", "x1 + x2"),
+        ("x1 * 3", "3.0 * x1"),
+        ("2 * (3 * x1)", "6.0 * x1"),
+        ("x1 + -3 * x2", "x1 - 3.0 * x2"),
+        ("x1 * x1", "square(x1)"),
+        ("x1 ^ 2", "square(x1)"),
+        ("sqrt(square(x1))", "abs(x1)"),
+        ("-(-(x1))", "x1"),
+        ("(4 * x1) / 2", "2.0 * x1"),
+        ("1 + (2 + x1)", "3.0 + x1"),
+    ];
+    for (input, want) in cases {
+        let got = parse(input, &n).unwrap().simplify().to_infix(&n);
+        assert_eq!(got, want, "{input}");
+    }
+}
+
+#[test]
+fn simplify_preserves_values_random() {
+    let n = names(&["x", "y"]);
+    let mut r = Rng::derive(8, &[]);
+    let mut checked = 0;
+    for _ in 0..4000 {
+        let e = random_expr(&mut r, 5, 2);
+        let s = e.simplify();
+        assert!(
+            s.complexity() <= e.complexity() + 1,
+            "{} -> {}",
+            e.to_infix(&n),
+            s.to_infix(&n)
+        );
+        for _ in 0..4 {
+            let x = [r.range(-3.0, 3.0), r.range(-3.0, 3.0)];
+            let (a, b) = (e.eval_point(&x), s.eval_point(&x));
+            if a.is_finite() && a.abs() < 1e8 {
+                assert!(
+                    (a - b).abs() <= 1e-9 * a.abs().max(1.0),
+                    "{} = {a} but {} = {b} at {x:?}",
+                    e.to_infix(&n),
+                    s.to_infix(&n)
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 3000, "{checked}");
+}
+
+#[test]
+fn constant_gradients_match_finite_differences() {
+    let n = names(&["x", "y"]);
+    let mut r = Rng::derive(9, &[]);
+    let xs: Vec<f64> = (0..20).map(|_| r.range(0.5, 3.0)).collect();
+    let ys: Vec<f64> = (0..20).map(|_| r.range(0.5, 3.0)).collect();
+    let cols: [&[f64]; 2] = [&xs, &ys];
+    let mut checked = 0;
+    for _ in 0..1500 {
+        let e = random_expr(&mut r, 4, 2);
+        let consts = e.constants();
+        for k in 0..consts.len() {
+            // Finite differences are unreliable when the step straddles a kink (abs at 0) or
+            // a tiny constant controls a huge value; skip near-zero constants.
+            if consts[k].abs() < 1e-3 {
+                continue;
+            }
+            let Some((v, d)) = e.eval_columns_const_grad(&cols, 20, k) else {
+                continue;
+            };
+            let h = 1e-6 * consts[k].abs().max(1.0);
+            let (mut hi, mut lo) = (consts.clone(), consts.clone());
+            hi[k] += h;
+            lo[k] -= h;
+            let a = e.with_constants(&hi).eval_columns(&cols, 20).unwrap();
+            let b = e.with_constants(&lo).eval_columns(&cols, 20).unwrap();
+            for i in 0..20 {
+                let fd = (a[i] - b[i]) / (2.0 * h);
+                if v[i].is_finite()
+                    && d[i].is_finite()
+                    && fd.is_finite()
+                    && v[i].abs() < 1e6
+                    && d[i].abs() < 1e6
+                {
+                    assert!(
+                        (d[i] - fd).abs() <= 1e-4 * (1.0 + d[i].abs()),
+                        "{} k={k}: {} vs {fd}",
+                        e.to_infix(&n),
+                        d[i]
+                    );
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 2000, "{checked}");
+}

@@ -156,6 +156,48 @@ impl Expr {
         if stack.len() == 1 { stack[0] } else { f64::NAN }
     }
 
+    /// Values and the derivative with respect to the `k`-th constant (postfix order), on whole
+    /// columns, by forward-mode differentiation. `None` if a variable is missing.
+    pub fn eval_columns_const_grad(
+        &self,
+        vars: &[&[f64]],
+        n: usize,
+        k: usize,
+    ) -> Option<(Vec<f64>, Vec<f64>)> {
+        let mut stack: Vec<(Vec<f64>, Vec<f64>)> = Vec::with_capacity(8);
+        let mut const_idx = 0usize;
+        for node in &self.nodes {
+            match *node {
+                Node::Const(c) => {
+                    let d = if const_idx == k { 1.0 } else { 0.0 };
+                    const_idx += 1;
+                    stack.push((vec![c; n], vec![d; n]));
+                }
+                Node::Var(i) => {
+                    let col = vars.get(i as usize)?;
+                    if col.len() != n {
+                        return None;
+                    }
+                    stack.push((col.to_vec(), vec![0.0; n]));
+                }
+                Node::Unary(op) => {
+                    let (a, da) = stack.last_mut()?;
+                    for (v, d) in a.iter_mut().zip(da.iter_mut()) {
+                        (*v, *d) = dual_unary(op, *v, *d);
+                    }
+                }
+                Node::Binary(op) => {
+                    let (b, db) = stack.pop()?;
+                    let (a, da) = stack.last_mut()?;
+                    for i in 0..n {
+                        (a[i], da[i]) = dual_binary(op, a[i], da[i], b[i], db[i]);
+                    }
+                }
+            }
+        }
+        if stack.len() == 1 { stack.pop() } else { None }
+    }
+
     /// Value and partial derivative with respect to `x[var]` at one point (forward mode).
     pub fn eval_partial(&self, x: &[f64], var: u16) -> (f64, f64) {
         let mut stack: Vec<(f64, f64)> = Vec::with_capacity(16);

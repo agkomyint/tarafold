@@ -24,7 +24,7 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
   - Done when: unit tests cover config precedence and split reproducibility. _R2.3, R7.1_
 - [x] 1.2 `tarafold-io`: CSV ingest with delimiter/decimal sniffing, missing tokens, numeric detection, exclusions with reasons, limits, SHA-256.
   - Done when: tests cover `;` + decimal comma files, mixed columns, limits, < 30 rows error, stdin input (`-`), and invalid weight columns. _R3.1–R3.10_
-- [ ] 1.3 `tarafold-expr`: postfix `Expr`, chunked deterministic evaluator, protected ops, infix/LaTeX/JSON printing, Pratt parser.
+- [x] 1.3 `tarafold-expr`: postfix `Expr`, chunked deterministic evaluator, protected ops, infix/LaTeX/JSON printing, Pratt parser.
   - Done when: proptest `parse(print(e)) == e` passes; golden vectors file exists. _R6.5, R6.8_
 - [x] 1.4 `tarafold-synth`: registry with 6 seed equations (one each from T1, T2, T4, T5, T6, T8) and generator writing CSV + `truth.json`; `tarafold synth`.
   - Done when: `tarafold synth business-revenue --rows 2000 --out d` writes both files reproducibly. _R11.1_
@@ -34,9 +34,9 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
   - Done when: metrics match a reference implementation within 1e-12 on fixtures. _R7.2, R7.8_
 - [x] 1.7 `tarafold-optimize` (minimal): bounds, fixed non-controllables at medians, 1-D Brent roots, DE for d > 1, feasibility check, top-N by error.
   - Done when: on T8 revenue, candidates evaluated with the true function are within 1% of goal. _R8.1, R8.2, R8.4_
-- [ ] 1.8 `tarafold-report` + `tarafold-engine`: report types with `schemars` (using the `targets[]` shape and top-level `optimize`/`suggest` sections from the start, even with one target and one goal), pipeline wiring of stages 1, 3, 5a, 6, 7, JSON writer, `equations.csv`, `candidates.csv`, `run.toml`.
+- [x] 1.8 `tarafold-report` + `tarafold-engine`: report types with `schemars` (using the `targets[]` shape and top-level `optimize`/`suggest` sections from the start, even with one target and one goal), pipeline wiring of stages 1, 3, 5a, 6, 7, JSON writer, `equations.csv`, `candidates.csv`, `run.toml`.
   - Done when: `tarafold schema` prints a schema that validates the produced report. _R10.1, R2.5_
-  - Status: report types, schema, JSON/CSV/run.toml outputs done. Automated validation of report.json against the schema still to do.
+  - Status: done; the CLI end-to-end test validates report.json against `tarafold schema` (non-finite numbers are `null` and allowed by the schema).
 - [x] 1.9 `tarafold-cli`: `run` with flags from design §7 (subset: target, goal, control, bounds, seed, out, format), human summary, JSON mode, exit codes.
   - Done when: `assert_cmd` integration test runs synth → run end to end and checks files and exit codes. _R2.1, R2.2, R2.6, R2.7_
 
@@ -58,16 +58,17 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
 
 ## Phase 3 — Symbolic regression engine
 
-- [ ] 3.1 Forward-mode AD over the evaluator (∂/∂constants, ∂/∂x).
+- [x] 3.1 Forward-mode AD over the evaluator (∂/∂constants, ∂/∂x).
   - Done when: proptest vs. central finite differences passes. _R8.8_
-  - Status: ∂/∂x done and tested against finite differences; constant fitting (LM) still uses finite-difference Jacobians.
+  - Status: ∂/∂x and ∂/∂constants (forward mode over columns) done; LM uses exact Jacobians.
 - [x] 3.2 Levenberg–Marquardt constant fitting.
   - Done when: recovers constants of T4/T5 structures from perturbed starts. _R6.2_
 - [x] 3.3 GP islands: init, mutations, crossover, tournament, regularized evolution, adaptive parsimony, hall of fame, migration, epoch-based determinism, budgets, cancellation.
   - Done when: determinism test (threads 1 vs 8) is byte-identical; T2, T3, T5 noiseless recovered. _R6.2, R6.9_
-- [ ] 3.4 `egg` simplification and canonical dedupe on the front.
+- [x] 3.4 `egg` simplification and canonical dedupe on the front.
   - Done when: proptest shows simplification preserves values; front has no equivalent duplicates. _R6.6_
-- [ ] 3.5 Operator configuration (`--operators`) and complexity weights.
+  - Decision: a deterministic rule-based simplifier (bottom-up to a fixed point) replaces `egg` for v0.1: no dependency, values preserved including protected semantics (randomized test over 4,000 expressions).
+- [x] 3.5 Operator configuration (`--operators`) and complexity weights.
   - Done when: restricting operators changes the search space as tested. _R6.3_
 - [x] 3.6 Re-run full bench; update baseline.
   - Done when: noiseless T1–T5/T8 symbolic recovery ≥ 70%. _Success criterion_

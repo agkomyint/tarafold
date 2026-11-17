@@ -113,6 +113,10 @@ struct RunArgs {
     /// Maximum features passed to discovery.
     #[arg(long)]
     max_features: Option<usize>,
+    /// Unary operators for equation search, comma-separated
+    /// (default: exp,log,sqrt,square,inv; also abs,sin,cos,tanh).
+    #[arg(long, value_delimiter = ',')]
+    operators: Vec<String>,
     /// Seed for all randomness.
     #[arg(long)]
     seed: Option<u64>,
@@ -317,6 +321,9 @@ fn build_config(a: &RunArgs) -> Result<RunConfig, Failure> {
     }
     if let Some(m) = a.max_features {
         cfg.discover.max_features = m.max(1);
+    }
+    if !a.operators.is_empty() {
+        cfg.discover.gp.operators = a.operators.iter().map(|s| s.trim().to_string()).collect();
     }
     Ok(cfg)
 }

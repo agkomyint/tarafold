@@ -1,6 +1,5 @@
 //! Levenberg–Marquardt refit of an expression's constants in the original units of `y`
-//! (design §5b "constant fitting"). Jacobians use central finite differences; Phase 3 can
-//! switch to forward-mode AD over constants without changing callers.
+//! (design §5b "constant fitting"). Jacobians are exact (forward-mode over constants).
 
 use tarafold_core::linalg;
 use tarafold_expr::Expr;
@@ -26,17 +25,10 @@ pub(crate) fn refine(expr: &Expr, x: &[Vec<f64>], y: &[f64], max_iter: usize) ->
     let mut cur = expr.clone();
     let mut lambda = 1e-3;
     for _ in 0..max_iter {
-        // Jacobian columns J[:, i] = ∂pred/∂p_i.
+        // Jacobian columns J[:, i] = ∂pred/∂p_i, exact by forward-mode differentiation.
         let mut jac: Vec<Vec<f64>> = Vec::with_capacity(k);
         for i in 0..k {
-            let h = 1e-6 * p[i].abs().max(1e-6);
-            let mut hi = p.clone();
-            let mut lo = p.clone();
-            hi[i] += h;
-            lo[i] -= h;
-            let a = cur.with_constants(&hi).eval_columns(&refs, y.len())?;
-            let b = cur.with_constants(&lo).eval_columns(&refs, y.len())?;
-            let col: Vec<f64> = a.iter().zip(&b).map(|(u, v)| (u - v) / (2.0 * h)).collect();
+            let (_, col) = cur.eval_columns_const_grad(&refs, y.len(), i)?;
             if col.iter().any(|v| !v.is_finite()) {
                 return (cur_sse < start).then_some(cur);
             }

@@ -114,6 +114,9 @@ pub struct GpConfig {
     pub max_complexity: usize,
     /// Evolution steps per island between migrations.
     pub epoch_steps: usize,
+    /// Unary operators the search may use (`+ - * /` are always available). Supported:
+    /// `exp log sqrt square abs sin cos tanh inv`.
+    pub operators: Vec<String>,
 }
 
 impl Default for GpConfig {
@@ -126,6 +129,9 @@ impl Default for GpConfig {
             rows: 800,
             max_complexity: 30,
             epoch_steps: 250,
+            operators: ["exp", "log", "sqrt", "square", "inv"]
+                .map(String::from)
+                .to_vec(),
         }
     }
 }

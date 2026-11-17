@@ -14,7 +14,6 @@ use tarafold_expr::{BinOp, Expr, Node, UnOp};
 use crate::lm;
 
 const BINARY: [BinOp; 4] = [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div];
-const UNARY: [UnOp; 5] = [UnOp::Exp, UnOp::Log, UnOp::Sqrt, UnOp::Square, UnOp::Inv];
 /// Log-loss penalty per unit of complexity, one per island (cycled). Diverse pressure keeps some
 /// islands exploring small expressions while others refine accurate large ones; the Pareto
 /// front and validation decide among them later.
@@ -41,6 +40,7 @@ struct Data {
     y: Vec<f64>,
     var_y: f64,
     n_vars: u16,
+    unary: Vec<UnOp>,
 }
 
 /// Top-level additive terms of `e` with constant factors stripped: `3*f(x) - g(x) + 2` gives
@@ -159,7 +159,7 @@ fn random_const(rng: &mut Rng) -> f64 {
     }
 }
 
-fn random_tree(rng: &mut Rng, depth: usize, n_vars: u16) -> Expr {
+fn random_tree(rng: &mut Rng, depth: usize, n_vars: u16, unary: &[UnOp]) -> Expr {
     if depth == 0 || rng.uniform() < 0.3 {
         return if rng.uniform() < 0.65 {
             Expr::var(rng.below(n_vars as usize) as u16)
@@ -167,16 +167,16 @@ fn random_tree(rng: &mut Rng, depth: usize, n_vars: u16) -> Expr {
             Expr::constant(random_const(rng))
         };
     }
-    if rng.uniform() < 0.25 {
-        random_tree(rng, depth - 1, n_vars).unary(UNARY[rng.below(UNARY.len())])
+    if !unary.is_empty() && rng.uniform() < 0.25 {
+        random_tree(rng, depth - 1, n_vars, unary).unary(unary[rng.below(unary.len())])
     } else {
-        let a = random_tree(rng, depth - 1, n_vars);
-        let b = random_tree(rng, depth - 1, n_vars);
+        let a = random_tree(rng, depth - 1, n_vars, unary);
+        let b = random_tree(rng, depth - 1, n_vars, unary);
         Expr::binary(BINARY[rng.below(BINARY.len())], a, b)
     }
 }
 
-fn mutate(rng: &mut Rng, e: &Expr, other: &Expr, n_vars: u16) -> Expr {
+fn mutate(rng: &mut Rng, e: &Expr, other: &Expr, n_vars: u16, unary: &[UnOp]) -> Expr {
     let n = e.len();
     let i = rng.below(n);
     let node = e.nodes()[i];
@@ -204,19 +204,22 @@ fn mutate(rng: &mut Rng, e: &Expr, other: &Expr, n_vars: u16) -> Expr {
         1 => {
             let repl = match node {
                 Node::Binary(_) => Node::Binary(BINARY[rng.below(BINARY.len())]),
-                Node::Unary(_) => Node::Unary(UNARY[rng.below(UNARY.len())]),
+                Node::Unary(op) if unary.is_empty() => Node::Unary(op),
+                Node::Unary(_) => Node::Unary(unary[rng.below(unary.len())]),
                 Node::Var(_) => Node::Var(rng.below(n_vars as usize) as u16),
                 Node::Const(_) => Node::Const(random_const(rng)),
             };
             e.with_node(i, repl).unwrap_or_else(|| e.clone())
         }
         // Replace a subtree with a random one.
-        2 => e.replace_subtree(i, &random_tree(rng, 2, n_vars)),
+        2 => e.replace_subtree(i, &random_tree(rng, 2, n_vars, unary)),
         // Wrap a subtree in a unary op.
-        3 => e.replace_subtree(i, &e.subtree(i).unary(UNARY[rng.below(UNARY.len())])),
+        3 if !unary.is_empty() => {
+            e.replace_subtree(i, &e.subtree(i).unary(unary[rng.below(unary.len())]))
+        }
         // Combine a subtree with a new terminal via a binary op.
         4 => {
-            let t = random_tree(rng, 0, n_vars);
+            let t = random_tree(rng, 0, n_vars, unary);
             let s = e.subtree(i);
             let op = BINARY[rng.below(BINARY.len())];
             let new = if rng.uniform() < 0.5 {
@@ -280,7 +283,13 @@ impl Island {
         for _ in 0..cfg.epoch_steps {
             let a = self.tournament(rng);
             let b = self.tournament(rng);
-            let mut child = mutate(rng, &self.pop[a].expr, &self.pop[b].expr, data.n_vars);
+            let mut child = mutate(
+                rng,
+                &self.pop[a].expr,
+                &self.pop[b].expr,
+                data.n_vars,
+                &data.unary,
+            );
             if child.complexity() > cfg.max_complexity || child.len() > 4 * cfg.max_complexity {
                 continue;
             }
@@ -318,6 +327,7 @@ pub(crate) fn search(
     train_y: &[f64],
     seeds: &[Expr],
     cfg: &GpConfig,
+    unary: Vec<UnOp>,
     seed: u64,
 ) -> (Vec<Expr>, usize) {
     let n = train_y.len();
@@ -345,6 +355,7 @@ pub(crate) fn search(
         y,
         var_y,
         n_vars: p.min(u16::MAX as usize) as u16,
+        unary,
     };
 
     // Initial populations: seeds spread across islands, the rest random.
@@ -362,7 +373,7 @@ pub(crate) fn search(
             }
             while pop.len() < cfg.population {
                 let depth = 1 + rng.below(4);
-                pop.push(random_tree(&mut rng, depth, data.n_vars));
+                pop.push(random_tree(&mut rng, depth, data.n_vars, &data.unary));
             }
             let pop = pop
                 .into_iter()

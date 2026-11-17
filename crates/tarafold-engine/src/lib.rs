@@ -538,6 +538,7 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
     {
         return Err(EngineError::Config("goal must be a finite number".into()));
     }
+    tarafold_discover::parse_operators(&cfg.discover.gp.operators).map_err(EngineError::Config)?;
     let started_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());

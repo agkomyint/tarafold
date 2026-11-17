@@ -512,6 +512,20 @@ pub fn select(front: &[Candidate]) -> usize {
     pick
 }
 
+/// Parse the GP operator list (`--operators`). Binary `+ - * /` are always available.
+pub fn parse_operators(names: &[String]) -> Result<Vec<UnOp>, String> {
+    let mut out = Vec::new();
+    for n in names {
+        let op = UnOp::from_name(n.trim()).ok_or_else(|| {
+            format!("unknown operator `{n}`; supported: exp log sqrt square abs sin cos tanh inv")
+        })?;
+        if !out.contains(&op) {
+            out.push(op);
+        }
+    }
+    Ok(out)
+}
+
 /// Run discovery.
 pub fn discover(input: &DiscoverInput<'_>) -> Result<DiscoverOutput, DiscoverError> {
     let p = input.train_x.len();
@@ -598,7 +612,8 @@ pub fn discover(input: &DiscoverInput<'_>) -> Result<DiscoverOutput, DiscoverErr
             .take(32)
             .map(|&i| pool.cands[i].expr.clone())
             .collect();
-        let (found, evals) = gp::search(input.train_x, y, &seeds, &cfg.gp, input.seed);
+        let unary = parse_operators(&cfg.gp.operators).map_err(DiscoverError::BadInput)?;
+        let (found, evals) = gp::search(input.train_x, y, &seeds, &cfg.gp, unary, input.seed);
         pool.evaluated += evals;
         let mut k = 0;
         for e in found {

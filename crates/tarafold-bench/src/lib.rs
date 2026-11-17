@@ -66,13 +66,18 @@ pub fn cases(suite: Suite) -> Vec<Case> {
         for &r in rows {
             for &n in noises {
                 for &d in distractor_options {
-                    out.push(Case {
-                        dataset: e.name.into(),
-                        rows: r,
-                        noise: n,
-                        distractors: d,
-                        seed: 1,
-                    });
+                    // Two data seeds per case in the full suite: the search is stochastic, and
+                    // one seed per case made a single flipped case look like a regression.
+                    let seeds: &[u64] = if suite == Suite::Full { &[1, 2] } else { &[1] };
+                    for &seed in seeds {
+                        out.push(Case {
+                            dataset: e.name.into(),
+                            rows: r,
+                            noise: n,
+                            distractors: d,
+                            seed,
+                        });
+                    }
                 }
             }
         }

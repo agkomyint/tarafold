@@ -371,7 +371,38 @@ impl Report {
 }
 
 /// JSON Schema of [`Report`].
+///
+/// Non-finite numbers (`NaN`, `±∞`, e.g. an undefined R²) are written as `null`, so every
+/// `number` in the schema also allows `null`.
 pub fn schema_json() -> Result<String, ReportError> {
     let schema = schemars::schema_for!(Report);
-    serde_json::to_string_pretty(&schema).map_err(|e| ReportError(e.to_string()))
+    let mut v = serde_json::to_value(&schema).map_err(|e| ReportError(e.to_string()))?;
+    allow_null_numbers(&mut v);
+    serde_json::to_string_pretty(&v).map_err(|e| ReportError(e.to_string()))
+}
+
+fn allow_null_numbers(v: &mut serde_json::Value) {
+    use serde_json::Value;
+    match v {
+        Value::Object(map) => {
+            match map.get("type").cloned() {
+                Some(Value::String(t)) if t == "number" => {
+                    map.insert("type".into(), serde_json::json!(["number", "null"]));
+                }
+                Some(Value::Array(ts))
+                    if ts.iter().any(|t| t == "number") && !ts.iter().any(|t| t == "null") =>
+                {
+                    let mut ts = ts;
+                    ts.push(Value::String("null".into()));
+                    map.insert("type".into(), Value::Array(ts));
+                }
+                _ => {}
+            }
+            for (_, child) in map.iter_mut() {
+                allow_null_numbers(child);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(allow_null_numbers),
+        _ => {}
+    }
 }

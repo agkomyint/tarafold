@@ -7,6 +7,7 @@
 mod eval;
 mod parse;
 mod print;
+mod simplify;
 
 use std::collections::BTreeSet;
 
@@ -298,72 +299,13 @@ impl Expr {
         }
     }
 
-    /// Fold constant sub-expressions and drop algebraic identities that are always safe:
-    /// `x*1`, `1*x`, `x+0`, `0+x`, `x-0`, `x/1`, `x^1`. Values are unchanged.
+    /// Algebraic simplification that preserves values: constant folding, identities, sign
+    /// and constant normalization, `a * inv(b) → a / b`, `x * x → square(x)`, and more
+    /// (see the `simplify` module). Repeated until nothing changes.
     pub fn simplify(&self) -> Self {
-        let mut stack: Vec<Expr> = Vec::new();
-        for &n in &self.nodes {
-            match n {
-                Node::Const(_) | Node::Var(_) => stack.push(Expr { nodes: vec![n] }),
-                Node::Unary(op) => {
-                    let Some(a) = stack.pop() else {
-                        return self.clone();
-                    };
-                    if let [Node::Const(c)] = a.nodes[..] {
-                        let v = eval::apply_unary(op, c);
-                        if v.is_finite() {
-                            stack.push(Expr::constant(v));
-                            continue;
-                        }
-                    }
-                    stack.push(a.unary(op));
-                }
-                Node::Binary(op) => {
-                    let (Some(b), Some(a)) = (stack.pop(), stack.pop()) else {
-                        return self.clone();
-                    };
-                    let ca = if let [Node::Const(c)] = a.nodes[..] {
-                        Some(c)
-                    } else {
-                        None
-                    };
-                    let cb = if let [Node::Const(c)] = b.nodes[..] {
-                        Some(c)
-                    } else {
-                        None
-                    };
-                    if let (Some(x), Some(y)) = (ca, cb) {
-                        let v = eval::apply_binary(op, x, y);
-                        if v.is_finite() {
-                            stack.push(Expr::constant(v));
-                            continue;
-                        }
-                    }
-                    let out = match (op, ca, cb) {
-                        (BinOp::Mul, Some(1.0), _) => b,
-                        (BinOp::Mul | BinOp::Div | BinOp::Pow, _, Some(1.0)) => a,
-                        (BinOp::Add, Some(0.0), _) => b,
-                        (BinOp::Add | BinOp::Sub, _, Some(0.0)) => a,
-                        // a - (-c) → a + c and a + (-c) → a - c (same value, cleaner output).
-                        (BinOp::Sub, _, Some(c)) if c < 0.0 => {
-                            Expr::binary(BinOp::Add, a, Expr::constant(-c))
-                        }
-                        (BinOp::Add, _, Some(c)) if c < 0.0 => {
-                            Expr::binary(BinOp::Sub, a, Expr::constant(-c))
-                        }
-                        _ => Expr::binary(op, a, b),
-                    };
-                    stack.push(out);
-                }
-            }
-        }
-        match (stack.pop(), stack.is_empty()) {
-            (Some(e), true) => e,
-            _ => self.clone(),
-        }
+        simplify::simplify(self)
     }
 }
-
 impl std::ops::Add for Expr {
     type Output = Expr;
 
