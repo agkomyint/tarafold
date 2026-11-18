@@ -92,6 +92,8 @@ pub struct DiscoverConfig {
     pub max_front: usize,
     /// Override the selected equation by front id.
     pub select: Option<usize>,
+    /// Prefer equations that still fit when the range of an input is held out (default on).
+    pub extrapolation_guard: bool,
     /// Genetic-programming search settings.
     pub gp: GpConfig,
 }
@@ -105,6 +107,7 @@ impl Default for DiscoverConfig {
             max_terms: 12,
             max_front: 20,
             select: None,
+            extrapolation_guard: true,
             gp: GpConfig::default(),
         }
     }

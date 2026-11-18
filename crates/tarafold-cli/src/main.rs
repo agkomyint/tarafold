@@ -220,6 +220,9 @@ struct RunArgs {
     /// Override the selected equation by front id.
     #[arg(long)]
     select: Option<usize>,
+    /// Pick the equation by validation loss and complexity only, without the held-out-range check.
+    #[arg(long)]
+    no_extrapolation_guard: bool,
     /// Maximum features passed to discovery.
     #[arg(long)]
     max_features: Option<usize>,
@@ -510,6 +513,9 @@ fn build_config(a: &RunArgs) -> Result<RunConfig, Failure> {
             SplitArg::Random => SplitStrategy::Random,
             SplitArg::Ordered => SplitStrategy::Ordered,
         };
+    }
+    if a.no_extrapolation_guard {
+        cfg.discover.extrapolation_guard = false;
     }
     if let Some(s) = a.select {
         cfg.discover.select = Some(s);
