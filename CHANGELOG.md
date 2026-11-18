@@ -6,6 +6,56 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.1] - 2026-11-18
+
+Release candidate for v0.1.0: every phase of the v0.1 spec is in, and the full benchmark
+meets all v0.1 acceptance thresholds ([docs/benchmarks.md](docs/benchmarks.md)).
+
+### Added
+
+- Visual workspace (`web/`, Vite + React + D3): Overview, Explore, Relationships, Equations,
+  Target, Next experiments, and Reliability views; brushing scatter plots that stay fast at
+  50,000 points, partial dependence and response surfaces, parallel-coordinate filtering of
+  trade-off sets, what-if sliders, keyboard navigation, data tables for every chart, and no
+  serious axe-core findings.
+- `report.html`: the workspace as one offline file with the report and a 20,000-row data
+  sample embedded; written by `run`, `optimize`, `suggest`, and `tarafold report <dir>`;
+  `--open` opens it.
+- `tarafold serve <report-dir|csv>`: the workspace with live goal editing, suggestions, and
+  re-runs. Loopback only by default, random access token, Host/Origin checks, 1 MB body limit.
+- `tarafold export --to python|js|sql|excel|latex|json`: standalone code with protected
+  semantics and a header (version, run, grade, evidence, training ranges, renamed columns).
+  Python and JavaScript are tested against the engine's golden vectors.
+- Row weights are now used by every fit (`--weights` was validated but ignored before).
+- `--time-budget`, Ctrl-C (keeps what was found and writes the report, marked
+  `interrupted`), `--max-evals`, `--threads`, `-v`/`-vv`, `--log-file`.
+- `--engine` is recorded in the config and report; `bench --compare` lists engines side by side.
+- Benchmark: 25 known equations (312 cases, new heteroscedastic T9 tier with weighting gain),
+  `--suite multi` (T11, known Pareto fronts), and a harder closed loop for `--suite active`
+  (T12) where suggestions reach the goal in about half the experiments of random sampling.
+- Fuzz targets (weekly on nightly) and seeded parser robustness tests; CI browser tests,
+  binary size and speed checks; docs: user guide, algorithms, report schema, benchmarks.
+
+### Changed
+
+- Trade-off sets are trimmed to 20 by farthest-point selection instead of crowding distance
+  (better spread with 3+ objectives); redundant objectives are judged on the whole first front.
+- Release binaries embed the web UI; the release workflow smoke-checks each binary.
+- Dependabot no longer proposes bumping the MSRV toolchain action.
+
+### Fixed
+
+- Constant fitting stalled when one constant's derivative is undefined on some rows (for
+  example the exponent in `x^3` with negative `x`); that constant is now held while the
+  others are fitted.
+- The heteroscedasticity warning no longer suggests `--weights` when weights are in use.
+
+### Benchmark (full suite, 312 cases)
+
+- Correct structure 95%, R² > 0.999 on fresh data 97%, inverse success 99.1%.
+- 90% interval coverage 0.904 on noisy cases; `high` grade for 96% of correct structures and
+  6 of 15 wrong ones (close approximations of noisy exponentials).
+
 ## [0.1.0-alpha.2] - 2026-11-17
 
 Second preview: Phases 5 and 6 of the v0.1 spec. The visual workspace, local server, and equation

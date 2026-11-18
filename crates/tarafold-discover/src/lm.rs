@@ -51,6 +51,12 @@ pub(crate) fn refine_w(
         let mut jac: Vec<Vec<f64>> = Vec::with_capacity(k);
         for i in 0..k {
             let (_, mut col) = cur.eval_columns_const_grad(&refs, y.len(), i)?;
+            // A derivative can be undefined where the value is defined, e.g. ∂(a^b)/∂b for
+            // a < 0 and integer b: moving that constant at all would make those rows undefined.
+            // Freeze it (zero column) and keep fitting the others.
+            if col.iter().any(|v| !v.is_finite()) {
+                col.iter_mut().for_each(|v| *v = 0.0);
+            }
             if let Some(s) = sw {
                 for (c, s) in col.iter_mut().zip(s) {
                     *c *= s;

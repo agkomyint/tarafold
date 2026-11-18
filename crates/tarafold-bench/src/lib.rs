@@ -147,6 +147,11 @@ pub struct CaseResult {
     pub error: Option<String>,
 }
 
+/// Read a number written as `null` (non-finite when serialized) back as NaN.
+fn nan_if_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    Ok(Option::<f64>::deserialize(d)?.unwrap_or(f64::NAN))
+}
+
 /// Aggregate metrics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Aggregate {
@@ -155,35 +160,46 @@ pub struct Aggregate {
     /// Cases that errored.
     pub errors: usize,
     /// Exact recovery rate.
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub exact_rate: f64,
     /// Structure recovery rate.
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub structure_rate: f64,
     /// Accuracy-solution rate.
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub accuracy_rate: f64,
     /// Median oracle gap.
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub median_oracle_gap: f64,
     /// Median extrapolation R².
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub median_extrapolation_r2: f64,
     /// Mean variable-selection precision.
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub var_precision: f64,
     /// Mean variable-selection recall.
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub var_recall: f64,
     /// Inverse success over all within-tolerance candidates.
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub inverse_success: f64,
     /// Mean 90% interval coverage on noisy cases.
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub coverage_90_noisy: f64,
     /// Median complexity ratio.
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub median_complexity_ratio: f64,
     /// Share graded `high` among cases with the correct structure.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub high_given_structure: f64,
     /// Share graded `high` among cases with the wrong structure (should be low).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub high_given_wrong: f64,
     /// Median weighting gain on noisy T9 cases (`null` when there are none).
     #[serde(default)]
     pub median_weighting_gain: Option<f64>,
     /// Total seconds.
+    #[serde(default, deserialize_with = "nan_if_null")]
     pub seconds: f64,
 }
 
@@ -205,10 +221,15 @@ pub struct BenchReport {
 /// (found predictions, true values, feature columns) on fresh data.
 type Fresh = (Vec<f64>, Vec<f64>, Vec<Vec<f64>>);
 
+/// Largest relative error of `a` against `b`. The denominator is floored at 1% of the mean
+/// magnitude of `b`, so targets that cross zero (e.g. `x^3 - x`) are not failed by
+/// round-off at their roots.
 fn max_rel(a: &[f64], b: &[f64]) -> f64 {
+    let scale = b.iter().map(|v| v.abs()).sum::<f64>() / b.len().max(1) as f64;
+    let floor = (1e-2 * scale).max(1e-12);
     a.iter()
         .zip(b)
-        .map(|(x, y)| (x - y).abs() / y.abs().max(1e-9))
+        .map(|(x, y)| (x - y).abs() / y.abs().max(floor))
         .fold(0.0, f64::max)
 }
 
@@ -430,7 +451,12 @@ pub fn run_case(case: &Case) -> CaseResult {
                 .truth
                 .features
                 .iter()
-                .map(|n| c.inputs.get(n).or(o.baseline.get(n)).copied())
+                .map(|n| {
+                    c.inputs.get(n).or(o.baseline.get(n)).copied().or_else(|| {
+                        // Columns the truth does not use (e.g. a weight column) do not matter.
+                        (!g.truth.equation_variables.contains(n)).then_some(0.0)
+                    })
+                })
                 .collect();
             let Some(x) = x else { continue };
             inverse_total += 1;

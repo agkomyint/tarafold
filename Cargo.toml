@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0-alpha.2"
+version = "0.1.0-rc.1"
 edition = "2024"
 rust-version = "1.99"
 license = "Apache-2.0"
@@ -11,19 +11,19 @@ repository = "https://github.com/tarafold/tarafold"
 authors = ["Tarafold contributors"]
 
 [workspace.dependencies]
-tarafold-core = { path = "crates/tarafold-core", version = "0.1.0-alpha.2" }
-tarafold-io = { path = "crates/tarafold-io", version = "0.1.0-alpha.2" }
-tarafold-expr = { path = "crates/tarafold-expr", version = "0.1.0-alpha.2" }
-tarafold-profile = { path = "crates/tarafold-profile", version = "0.1.0-alpha.2" }
-tarafold-relate = { path = "crates/tarafold-relate", version = "0.1.0-alpha.2" }
-tarafold-discover = { path = "crates/tarafold-discover", version = "0.1.0-alpha.2" }
-tarafold-validate = { path = "crates/tarafold-validate", version = "0.1.0-alpha.2" }
-tarafold-optimize = { path = "crates/tarafold-optimize", version = "0.1.0-alpha.2" }
-tarafold-synth = { path = "crates/tarafold-synth", version = "0.1.0-alpha.2" }
-tarafold-bench = { path = "crates/tarafold-bench", version = "0.1.0-alpha.2" }
-tarafold-report = { path = "crates/tarafold-report", version = "0.1.0-alpha.2" }
-tarafold-engine = { path = "crates/tarafold-engine", version = "0.1.0-alpha.2" }
-tarafold-server = { path = "crates/tarafold-server", version = "0.1.0-alpha.2" }
+tarafold-core = { path = "crates/tarafold-core", version = "0.1.0-rc.1" }
+tarafold-io = { path = "crates/tarafold-io", version = "0.1.0-rc.1" }
+tarafold-expr = { path = "crates/tarafold-expr", version = "0.1.0-rc.1" }
+tarafold-profile = { path = "crates/tarafold-profile", version = "0.1.0-rc.1" }
+tarafold-relate = { path = "crates/tarafold-relate", version = "0.1.0-rc.1" }
+tarafold-discover = { path = "crates/tarafold-discover", version = "0.1.0-rc.1" }
+tarafold-validate = { path = "crates/tarafold-validate", version = "0.1.0-rc.1" }
+tarafold-optimize = { path = "crates/tarafold-optimize", version = "0.1.0-rc.1" }
+tarafold-synth = { path = "crates/tarafold-synth", version = "0.1.0-rc.1" }
+tarafold-bench = { path = "crates/tarafold-bench", version = "0.1.0-rc.1" }
+tarafold-report = { path = "crates/tarafold-report", version = "0.1.0-rc.1" }
+tarafold-engine = { path = "crates/tarafold-engine", version = "0.1.0-rc.1" }
+tarafold-server = { path = "crates/tarafold-server", version = "0.1.0-rc.1" }
 
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

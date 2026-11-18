@@ -542,7 +542,14 @@ fn fit_target(
     if residuals.heteroscedastic {
         warnings.push(Warning {
             code: "heteroscedastic".into(),
-            message: format!("residual size changes with the prediction for `{target}`; intervals may be too narrow in parts of the range (consider --weights)"),
+            message: format!(
+                "residual size changes with the prediction for `{target}`; intervals may be too narrow in parts of the range ({})",
+                if data.weights.is_some() {
+                    "the fit uses the row weights, but intervals assume one residual size"
+                } else {
+                    "consider --weights"
+                }
+            ),
             target: Some(target.into()),
         });
     }

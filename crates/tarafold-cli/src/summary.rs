@@ -19,6 +19,14 @@ fn fmt_num(v: f64) -> String {
     }
 }
 
+/// The serialized (snake_case) name of a unit enum value such as a grade or evidence level.
+fn name_of<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|j| j.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
 /// Render the summary.
 pub fn render(r: &Report, out: &Path) -> String {
     let mut s = String::new();
@@ -46,11 +54,11 @@ pub fn render(r: &Report, out: &Path) -> String {
         let _ = writeln!(s, "Selected  {} = {}", t.target, sel.infix);
         let _ = writeln!(
             s,
-            "          R²(test) {:.6}  RMSE(test) {}  grade: {:?}  evidence: {:?}",
+            "          R²(test) {:.6}  RMSE(test) {}  grade: {}  evidence: {}",
             sel.metrics.test.r2,
             fmt_num(sel.metrics.test.rmse),
-            v.reliability.grade,
-            v.evidence
+            name_of(&v.reliability.grade),
+            name_of(&v.evidence)
         );
         if let Some(st) = &v.stability {
             let _ = writeln!(
@@ -257,6 +265,11 @@ pub fn render(r: &Report, out: &Path) -> String {
     for w in &r.warnings {
         let _ = writeln!(s, "Warning   {}", w.message);
     }
-    let _ = writeln!(s, "Wrote     {}", out.join("report.json").display());
+    let _ = writeln!(
+        s,
+        "Wrote     {}  (open {} for the interactive report)",
+        out.join("report.json").display(),
+        out.join("report.html").display()
+    );
     s
 }
