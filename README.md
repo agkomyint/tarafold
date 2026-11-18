@@ -14,6 +14,49 @@ observations and it:
 It ships as **one binary** with no Python, Julia, or Node runtime. The CLI runs the whole
 pipeline, and an embedded visual workspace lets you explore the results.
 
+## A simple example
+
+A lab grows plant cells and records one row per day:
+
+| day | temperature_C | water_ml | light_hours | plant_growth | bacteria_count |
+|---|---|---|---|---|---|
+| 1 | 24.1 | 50 | 12 | 0.82 | 1,200 |
+| 2 | 26.3 | 65 | 10 | 0.88 | 2,950 |
+| … | … | … | … | … | … |
+
+The question: *what should we set temperature, water, and light to, so that bacteria stay
+as low as possible while the plants keep growing?*
+
+```sh
+tarafold run lab.csv --target bacteria_count,plant_growth \
+  --control temperature_C,water_ml,light_hours \
+  --prefer min:bacteria_count --require "plant_growth>=0.8" \
+  --split ordered --suggest 6 --open
+```
+
+Tarafold then gives you, in a terminal summary and an interactive page in your browser:
+
+1. **An equation for each outcome** that a person can read, for example
+   `bacteria_count = 140 · e^(0.08·temperature_C) · water_ml^0.5 / light_hours`
+   (an illustration; your data decides the actual form).
+2. **How far to trust it**: a grade (`high`, `medium`, `low`), error ranges, and which
+   measurements turned out not to matter.
+3. **Settings to try**: temperature, water, and light that keep plant growth at or above 0.8
+   with the fewest bacteria, plus the trade-off between the two goals.
+4. **The next experiments**: six settings to run next, chosen where the equations are least
+   certain or the goal looks reachable. Run them, add the rows, and run Tarafold again.
+5. **The formula as code** if you want it elsewhere: `tarafold export <dir> --to excel`
+   (also Python, JavaScript, SQL, LaTeX).
+
+Two things it will not do: claim cause and effect from data you only observed (it says
+"association" unless you declare that you set the inputs on purpose with
+`--data-source experimental`), and trust settings far outside what you have tried (those
+are marked "outside data domain").
+
+Real runs with data, commands, and output checked against the known answer are in the
+[case studies](docs/case-studies/README.md): enzyme kinetics from five lab tables, a
+marketing funnel, injection molding, crop trials over four seasons, and building energy.
+
 > **Status:** v0.1.0. Prebuilt binaries: see GitHub Releases. Everything below
 > works: discovery (sparse regression + genetic programming), reliability (bootstrap,
 > stability, grades), single- and multi-goal optimization with constraints, next-experiment
@@ -22,6 +65,9 @@ pipeline, and an embedded visual workspace lets you explore the results.
 > The v0.1 spec is in [`.kiro/specs/tarafold-v0-1/`](.kiro/specs/tarafold-v0-1/).
 
 ### Try it now
+
+Download `tarafold` for Windows or Linux from
+[GitHub Releases](https://github.com/agkomyint/tarafold/releases), or build it:
 
 ```sh
 cargo build --release -p tarafold-cli
