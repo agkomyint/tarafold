@@ -79,14 +79,30 @@ test("brushing a 50k-point scatter stays above 30 frames per second", async ({ p
   const y0 = box.y + 30;
   await page.mouse.move(x0, y0);
   await page.mouse.down();
-  const steps = 30;
+  // Count animation frames the page renders while the brush is dragged continuously.
+  await page.evaluate(() => {
+    const w = window as unknown as { __frames: number; __stop: boolean };
+    w.__frames = 0;
+    w.__stop = false;
+    const tick = () => {
+      w.__frames++;
+      if (!w.__stop) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
   const t0 = Date.now();
-  for (let i = 1; i <= steps; i++) {
-    await page.mouse.move(x0 + i * 12, y0 + i * 8);
-    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+  for (let i = 1; i <= 40; i++) {
+    await page.mouse.move(x0 + i * 9, y0 + i * 6);
   }
-  const perFrame = (Date.now() - t0) / steps;
+  const elapsed = (Date.now() - t0) / 1000;
+  const frames = await page.evaluate(() => {
+    const w = window as unknown as { __frames: number; __stop: boolean };
+    w.__stop = true;
+    return w.__frames;
+  });
   await page.mouse.up();
   await expect(page.getByText(/rows selected/)).toBeVisible();
-  expect(perFrame).toBeLessThan(33);
+  const fps = frames / Math.max(elapsed, 1e-3);
+  console.log(`brushing 50k points: ${fps.toFixed(1)} frames per second over ${elapsed.toFixed(2)} s`);
+  expect(fps).toBeGreaterThan(30);
 });
