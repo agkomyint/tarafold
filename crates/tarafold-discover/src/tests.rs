@@ -156,3 +156,68 @@ fn selection_prefers_simplest_exact() {
     let front = vec![mk(1, 1.0), mk(5, 0.3), mk(9, 1e-25), mk(15, 1e-29)];
     assert_eq!(select(&front), 2);
 }
+
+/// Deterministic noisy data for y = x^2 on [0, 4].
+fn square_data(n: usize) -> (Vec<Vec<f64>>, Vec<f64>) {
+    let mut state = 12345_u64;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((state >> 11) as f64) / ((1_u64 << 53) as f64)
+    };
+    let x: Vec<f64> = (0..n).map(|_| 4.0 * next()).collect();
+    let y: Vec<f64> = x.iter().map(|v| v * v + 0.02 * (next() - 0.5)).collect();
+    (vec![x], y)
+}
+
+fn cand(expr: &str, complexity: usize, val: f64) -> Candidate {
+    Candidate {
+        expr: parse(expr, &["x".to_string()]).unwrap(),
+        complexity,
+        train_nmse: val,
+        val_nmse: val,
+        strategy: Strategy::Genetic,
+    }
+}
+
+#[test]
+fn extrapolation_error_separates_right_and_wrong_structure() {
+    let (x, y) = square_data(1_000);
+    let right = parse("0.9 * square(x)", &["x".to_string()]).unwrap();
+    let wrong = parse("0.5 * exp(0.9 * x)", &["x".to_string()]).unwrap();
+    let r = extrapolation_nmse(&right, &x, &y);
+    let w = extrapolation_nmse(&wrong, &x, &y);
+    assert!(r < 1e-3, "right structure tail error {r}");
+    assert!(w > 10.0 * r.max(1e-6), "wrong {w} vs right {r}");
+}
+
+#[test]
+fn guard_overrides_a_simpler_structure_that_fails_outside_the_range() {
+    let (x, y) = square_data(1_000);
+    // The exponential is simpler and looks equally good in range; only the square survives
+    // holding out the ends of the range.
+    let front = vec![
+        cand("0.5 * exp(0.9 * x)", 5, 1.0e-3),
+        cand("0.9 * square(x)", 6, 1.0e-3),
+    ];
+    assert_eq!(select(&front), 0, "unguarded rule picks the simpler one");
+    assert_eq!(select_guarded(&front, &x, &y), 1);
+}
+
+#[test]
+fn guard_keeps_the_simple_exact_choice() {
+    let (x, y) = square_data(1_000);
+    let front = vec![
+        cand("0.9 * square(x)", 6, 1.0e-3),
+        cand("0.9 * square(x) + 0.001 * x", 10, 1.0e-3),
+    ];
+    assert_eq!(select_guarded(&front, &x, &y), select(&front));
+}
+
+#[test]
+fn guard_ignores_tiny_datasets() {
+    let front = vec![cand("x", 2, 0.5), cand("square(x)", 3, 0.5)];
+    let (x, y) = (vec![vec![1.0, 2.0, 3.0]], vec![1.0, 4.0, 9.0]);
+    assert_eq!(select_guarded(&front, &x, &y), select(&front));
+}

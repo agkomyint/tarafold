@@ -481,16 +481,25 @@ pub fn pareto_front(cands: &[Candidate], max: usize) -> Vec<Candidate> {
 /// Selection rule (design §5c): among front members within 10% of the best validation loss,
 /// pick the largest drop in log-loss per unit of complexity versus the previous front member.
 pub fn select(front: &[Candidate]) -> usize {
-    const FLOOR: f64 = 1e-14;
+    let cutoff = loss_cutoff(front);
+    pick(front, |i| front[i].val_nmse <= cutoff)
+}
+
+fn loss_cutoff(front: &[Candidate]) -> f64 {
     let best = front
         .iter()
         .map(|c| c.val_nmse)
         .fold(f64::INFINITY, f64::min);
-    let cutoff = best + (0.1 * best).max(1e-6);
-    let mut pick = 0;
-    let mut pick_score = f64::NEG_INFINITY;
+    best + (0.1 * best).max(1e-6)
+}
+
+/// The parsimony rule restricted to the members `ok` accepts.
+fn pick(front: &[Candidate], ok: impl Fn(usize) -> bool) -> usize {
+    const FLOOR: f64 = 1e-14;
+    let mut chosen = 0;
+    let mut chosen_score = f64::NEG_INFINITY;
     for i in 0..front.len() {
-        if front[i].val_nmse > cutoff {
+        if !ok(i) {
             continue;
         }
         let score = if i == 0 {
@@ -504,12 +513,113 @@ pub fn select(front: &[Candidate]) -> usize {
                 .max(1) as f64;
             (prev - cur) / dc
         };
-        if score > pick_score + 1e-12 {
-            pick = i;
-            pick_score = score;
+        if score > chosen_score + 1e-12 {
+            chosen = i;
+            chosen_score = score;
         }
     }
-    pick
+    chosen
+}
+
+/// Share of rows held out at each end of an input's range by [`extrapolation_nmse`].
+const TAIL_SHARE: f64 = 0.2;
+/// Rows used by the extrapolation probe (strided subsample beyond this).
+const PROBE_ROWS: usize = 3_000;
+/// Validation-loss factor (vs the best) that bounds the pool the extrapolation probe examines.
+const POOL_FACTOR: f64 = 4.0;
+/// A candidate is admissible when its tail error is within this factor of the best one.
+const TAIL_FACTOR: f64 = 2.0;
+/// Absolute slack on the tail error, in units of `Var(y)`.
+const TAIL_SLACK: f64 = 1e-4;
+
+/// Leave-range-out error of an expression's structure: for every input it uses, hold out the
+/// lowest and the highest 20% of that input, refit the constants on the rest, and score the
+/// held-out tail. Returns the worst case as MSE / Var(y). `0.0` means no information (too few
+/// rows, or the expression uses no inputs).
+pub fn extrapolation_nmse(expr: &Expr, x: &[Vec<f64>], y: &[f64]) -> f64 {
+    let n = y.len();
+    let vars = expr.variables();
+    if n < 50 || vars.is_empty() {
+        return 0.0;
+    }
+    let step = n.div_ceil(PROBE_ROWS);
+    let rows: Vec<usize> = (0..n).step_by(step).collect();
+    let m = rows.len();
+    let ys: Vec<f64> = rows.iter().map(|&i| y[i]).collect();
+    let var = stats::variance(&ys);
+    if var <= 0.0 || !var.is_finite() {
+        return 0.0;
+    }
+    let tail = ((m as f64) * TAIL_SHARE).ceil() as usize;
+    let mut worst = 0.0_f64;
+    for &v in &vars {
+        let Some(col) = x.get(usize::from(v)) else {
+            return f64::INFINITY;
+        };
+        let mut order: Vec<usize> = (0..m).collect();
+        order.sort_by(|&a, &b| col[rows[a]].total_cmp(&col[rows[b]]));
+        for (held, fit) in [
+            (&order[..tail], &order[tail..]),
+            (&order[m - tail..], &order[..m - tail]),
+        ] {
+            let cols = |idx: &[usize]| -> Vec<Vec<f64>> {
+                x.iter()
+                    .map(|c| idx.iter().map(|&j| c[rows[j]]).collect())
+                    .collect()
+            };
+            let fx = cols(fit);
+            let fy: Vec<f64> = fit.iter().map(|&j| ys[j]).collect();
+            let refit = lm::refine(expr, &fx, &fy, 40).unwrap_or_else(|| expr.clone());
+            let hx = cols(held);
+            let hy: Vec<f64> = held.iter().map(|&j| ys[j]).collect();
+            let refs: Vec<&[f64]> = hx.iter().map(Vec::as_slice).collect();
+            let Some(pred) = refit.eval_columns(&refs, hy.len()) else {
+                return f64::INFINITY;
+            };
+            let mse = pred
+                .iter()
+                .zip(&hy)
+                .map(|(p, t)| (p - t) * (p - t))
+                .sum::<f64>()
+                / hy.len() as f64;
+            if !mse.is_finite() {
+                return f64::INFINITY;
+            }
+            worst = worst.max(mse / var);
+        }
+    }
+    worst
+}
+
+/// Selection rule with an extrapolation guard. Candidates within 10% of the best validation loss
+/// are scored by [`extrapolation_nmse`]; only those whose tail error is within a factor of two of
+/// the best (plus a small absolute slack) stay eligible, then the usual parsimony rule decides.
+/// Falls back to [`select`] when the guard has nothing to compare.
+pub fn select_guarded(front: &[Candidate], x: &[Vec<f64>], y: &[f64]) -> usize {
+    let cutoff = loss_cutoff(front);
+    let best_val = front
+        .iter()
+        .map(|c| c.val_nmse)
+        .fold(f64::INFINITY, f64::min);
+    // The probe looks at a wider pool than the parsimony rule: an equation with a somewhat worse
+    // in-range loss can be the only one that extrapolates.
+    let pool = cutoff.max(POOL_FACTOR * best_val);
+    let near: Vec<usize> = (0..front.len())
+        .filter(|&i| front[i].val_nmse <= pool)
+        .collect();
+    if near.len() < 2 {
+        return select(front);
+    }
+    let mut tail = vec![f64::INFINITY; front.len()];
+    for &i in &near {
+        tail[i] = extrapolation_nmse(&front[i].expr, x, y);
+    }
+    let best = near.iter().map(|&i| tail[i]).fold(f64::INFINITY, f64::min);
+    if !best.is_finite() {
+        return select(front);
+    }
+    let limit = (TAIL_FACTOR * best).max(best + TAIL_SLACK);
+    pick(front, |i| front[i].val_nmse <= pool && tail[i] <= limit)
 }
 
 /// Parse the GP operator list (`--operators`). Binary `+ - * /` are always available.
@@ -639,6 +749,16 @@ pub fn discover(input: &DiscoverInput<'_>) -> Result<DiscoverOutput, DiscoverErr
     let front = pareto_front(&pool.cands, cfg.max_front);
     let selected = match cfg.select {
         Some(i) if i < front.len() => i,
+        _ if cfg.extrapolation_guard => {
+            let all_x: Vec<Vec<f64>> = input
+                .train_x
+                .iter()
+                .zip(input.val_x)
+                .map(|(a, b)| a.iter().chain(b).copied().collect())
+                .collect();
+            let all_y: Vec<f64> = input.train_y.iter().chain(input.val_y).copied().collect();
+            select_guarded(&front, &all_x, &all_y)
+        }
         _ => select(&front),
     };
     Ok(DiscoverOutput {
