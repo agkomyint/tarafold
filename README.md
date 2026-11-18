@@ -14,7 +14,7 @@ observations and it:
 It ships as **one binary** with no Python, Julia, or Node runtime. The CLI runs the whole
 pipeline, and an embedded visual workspace lets you explore the results.
 
-> **Status:** v0.1 release candidate. Prebuilt binaries: see GitHub Releases. Everything below
+> **Status:** v0.1.0. Prebuilt binaries: see GitHub Releases. Everything below
 > works: discovery (sparse regression + genetic programming), reliability (bootstrap,
 > stability, grades), single- and multi-goal optimization with constraints, next-experiment
 > suggestions, row weights, equation export, the visual workspace (`report.html` and

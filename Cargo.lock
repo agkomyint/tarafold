@@ -1371,7 +1371,7 @@ checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
 
 [[package]]
 name = "tarafold-bench"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-cli"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1410,7 +1410,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-core"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "rand_chacha",
  "rand_core",
@@ -1422,7 +1422,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-discover"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "rayon",
  "schemars",
@@ -1434,7 +1434,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-engine"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "rayon",
  "tarafold-core",
@@ -1452,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-expr"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "schemars",
  "serde",
@@ -1463,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-io"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "csv",
  "sha2",
@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-optimize"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "schemars",
  "serde",
@@ -1484,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-profile"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "rayon",
  "schemars",
@@ -1494,7 +1494,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-relate"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "rayon",
  "schemars",
@@ -1504,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-report"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "schemars",
  "serde",
@@ -1521,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-server"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "axum",
  "getrandom 0.4.3",
@@ -1540,7 +1540,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-synth"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "tarafold-core",
@@ -1551,7 +1551,7 @@ dependencies = [
 
 [[package]]
 name = "tarafold-validate"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "rayon",
  "schemars",

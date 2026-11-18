@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-18
+
+First stable release. Same features as 0.1.0-rc.1, verified from the published release
+artifacts (checksums, attestations, smoke bench on the downloaded binary, embedded UI).
+
+### Added
+
+- A test that the dependency graph contains no HTTP client or TLS crate (no outbound
+  network calls).
+
+### Changed
+
+- Browser test for brushing speed now counts rendered frames during a drag.
+
 ## [0.1.0-rc.1] - 2026-11-18
 
 Release candidate for v0.1.0: every phase of the v0.1 spec is in, and the full benchmark

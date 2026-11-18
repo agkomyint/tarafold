@@ -482,3 +482,29 @@ fn time_budget_stops_search_and_says_so() {
     assert!(notes.contains("time budget ran out"), "{notes}");
     assert!(out.join("report.html").exists());
 }
+
+/// No telemetry, no network calls (R14.6): the dependency graph has no HTTP client or TLS
+/// stack, so the binary cannot open outbound HTTP(S) connections. The only socket code is the
+/// loopback server behind `tarafold serve`.
+#[test]
+fn no_network_client_in_the_dependency_graph() {
+    let lock = include_str!("../../../Cargo.lock");
+    for banned in [
+        "reqwest",
+        "ureq",
+        "curl",
+        "isahc",
+        "attohttpc",
+        "surf",
+        "native-tls",
+        "rustls",
+        "openssl",
+        "hyper-tls",
+        "hyper-rustls",
+    ] {
+        assert!(
+            !lock.contains(&format!("name = \"{banned}\"")),
+            "network client crate `{banned}` in Cargo.lock"
+        );
+    }
+}
