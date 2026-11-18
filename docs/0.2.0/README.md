@@ -119,8 +119,6 @@ look closer, run the null control, and check the literature.
 
 ## Also in 0.2
 
-- **Python package** (`pip install tarafold`, `tarafold.run(df, target="y")`), the fastest
-  way to reach data scientists.
 - **Progress events** from the engine, so the UI and other apps can show where a long run is.
 - **Simulator loop:** `--simulator "<command>"` calls a user's simulator for each suggested
   experiment, so closed-loop discovery is one command.
@@ -131,18 +129,26 @@ look closer, run the null control, and check the literature.
 
 ## Priorities
 
+0.2.0 focuses on **more data** and **longer, deeper runs**. More rows lower the effect of
+noise on constants and selection; longer searches find forms the default budget misses.
+Neither fixes bias from errors in the inputs or the approximation problem on noisy data,
+so the accuracy items stay in the plan at lower priority.
+
 | Priority | Item | Size | Gate metric |
 |---|---|---|---|
-| 1 | Units + dimensional analysis | large | T5 structure ≥ 80% at 10% noise |
-| 1 | Known-law catalog + null controls | medium | novelty tier: ≤ 5% false "known" |
-| 1 | Grade calibration | medium | wrong-structure `high` ≤ 20% |
-| 2 | Automatic scale choice, errors in inputs | medium | Kepler raw data recovered; exponent within 0.02 |
-| 2 | Lags, categoricals, column roles | medium | new time-series tier |
-| 2 | Python package, progress events | medium | `pip install` works on Windows and Linux |
-| 3 | `--effort` and budget curve | small | curve published in benchmarks.md |
-| 3 | Parquet, large-data subsampling | large | 10M × 20 under 10 min |
-| 3 | Regime detection, sharp-feature operators | large | regime and sharp-feature tiers |
-| 3 | Simulator loop, multi-table input | medium | case study rerun with one command |
+| 1 | Larger data: Parquet, streaming CSV, full-data refits, stratified subsampling | large | 10M rows x 20 columns under 10 min on 8 cores; recovery unchanged |
+| 1 | Longer compute: --effort, checkpoints, resumable runs, budget curve | medium | budget curve published; max improves T5 structure recovery |
+| 1 | More columns: screening for 100–1,000 columns, column roles | medium | variable precision >= 0.9 with 200 distractors |
+| 2 | Progress events (needed for long runs) | small | UI and CLI show stage and search progress |
+| 2 | Grade calibration | medium | wrong-structure `high` <= 20% |
+| 2 | Units + dimensional analysis | large | T5 structure >= 80% at 10% noise |
+| 2 | Known-law catalog + null controls | medium | novelty tier: <= 5% false "known" |
+| 3 | Automatic scale choice, errors in inputs | medium | Kepler raw data recovered; exponent within 0.02 |
+| 3 | Lags, categoricals, multi-table input | medium | time-series tier; case study rerun with one command |
+| 3 | Regime detection, sharp-feature operators, simulator loop | large | regime and sharp-feature tiers |
+| — | Python package | — | not in 0.2.0 |
+
+The task list is in [tasks.md](tasks.md).
 
 Rule for every item, as in v0.1: no aggregate benchmark metric may drop by more than 3
 points, and every change is measured with `tarafold bench` before it ships.
