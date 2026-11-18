@@ -21,10 +21,18 @@ tarafold-report.workspace = true
 tarafold-engine.workspace = true
 tarafold-bench.workspace = true
 tarafold-profile.workspace = true
+tarafold-server = { workspace = true, optional = true }
 clap.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+ctrlc = "3.5.3"
+rayon.workspace = true
+
+[features]
+# The local web server (tarafold serve). On by default; disable for a smaller binary.
+default = ["serve"]
+serve = ["dep:tarafold-server"]
 
 [dev-dependencies]
 jsonschema.workspace = true

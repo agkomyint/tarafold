@@ -13,3 +13,6 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    ignore:
+      # The toolchain version is the MSRV (rust-version = "1.99"); bump it by hand.
+      - dependency-name: dtolnay/rust-toolchain

@@ -382,7 +382,8 @@ fn fit_target(
 
     // Structural stability: rediscover on bootstrap resamples of the training rows with a
     // reduced budget and count how often an equivalent equation comes back.
-    let stability = (cfg.validate.stability > 0).then(|| {
+    // Skipped when the search was stopped early: rediscoveries would stop at once too.
+    let stability = (cfg.validate.stability > 0 && !tarafold_core::stop::requested()).then(|| {
         timed(stages, &format!("stability:{target}"), || {
             let mut dcfg = cfg.discover.clone();
             dcfg.gp.max_evals =
@@ -863,6 +864,11 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
     if cfg.validate.stability == 0 {
         notes.push(text::STABILITY_PENDING.into());
     }
+    if tarafold_core::stop::interrupted() {
+        notes.push(text::INTERRUPTED_NOTE.into());
+    } else if tarafold_core::stop::deadline_hit() {
+        notes.push(text::TIME_BUDGET_NOTE.into());
+    }
     let report = Report {
         schema_version: SCHEMA_VERSION.into(),
         tarafold_version: VERSION.into(),
@@ -873,7 +879,11 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
                 cfg.seed
             ),
             started_unix,
-            status: RunStatus::Completed,
+            status: if tarafold_core::stop::interrupted() {
+                RunStatus::Interrupted
+            } else {
+                RunStatus::Completed
+            },
             engine: "classical".into(),
             config: cfg.clone(),
             stages,

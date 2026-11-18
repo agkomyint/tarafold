@@ -4,6 +4,7 @@
 //! and easy to splice. Operations use *protected* semantics: domain errors produce `NaN`
 //! instead of silently changing the meaning of the equation (design §4).
 
+pub mod codegen;
 mod eval;
 mod parse;
 mod print;

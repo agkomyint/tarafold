@@ -78,6 +78,32 @@ fn synth_then_run_end_to_end() {
         errors.is_empty(),
         "report.json does not match its schema: {errors:#?}"
     );
+
+    // Export the selected equation in every format (R16).
+    for (to, needle) in [
+        ("python", "def predict_revenue("),
+        ("js", "export function predict_revenue("),
+        ("sql", "AS \"predicted_revenue\""),
+        ("excel", "\n=("),
+        ("latex", "\\mathrm{revenue} ="),
+        ("json", "\"selected\": true"),
+    ] {
+        let a = tarafold()
+            .arg("export")
+            .arg(&out)
+            .args(["--to", to])
+            .assert()
+            .success();
+        let text = String::from_utf8(a.get_output().stdout.clone()).unwrap();
+        assert!(text.contains(needle), "{to}: {text}");
+        assert!(text.contains("Reliability grade: high"), "{to}: {text}");
+    }
+    tarafold()
+        .arg("export")
+        .arg(&out)
+        .args(["--to", "python", "--id", "999"])
+        .assert()
+        .code(2);
 }
 
 #[test]
@@ -418,4 +444,41 @@ fn suggest_and_saved_report_commands() {
         .arg(&data2)
         .assert()
         .code(2);
+}
+
+#[test]
+fn time_budget_stops_search_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let synth = dir.path().join("s");
+    tarafold()
+        .args(["synth", "exp-log", "--rows", "300", "--out"])
+        .arg(&synth)
+        .assert()
+        .success();
+    let out = dir.path().join("o");
+    let a = tarafold()
+        .arg("run")
+        .arg(synth.join("data.csv"))
+        .args([
+            "--target",
+            "y",
+            "--time-budget",
+            "0.001s",
+            "-v",
+            "--threads",
+            "2",
+            "--out",
+        ])
+        .arg(&out)
+        .assert();
+    let code = a.get_output().status.code().unwrap();
+    assert!(code == 0 || code == 4, "exit {code}");
+    let stderr = String::from_utf8(a.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("stage "), "{stderr}");
+    let report: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(out.join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["run"]["status"], "completed");
+    let notes = report["notes"].to_string();
+    assert!(notes.contains("time budget ran out"), "{notes}");
+    assert!(out.join("report.html").exists());
 }

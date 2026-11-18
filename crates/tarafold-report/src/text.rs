@@ -24,6 +24,16 @@ Candidates outside the data domain are extrapolations.";
 pub const STABILITY_PENDING: &str = "Structural stability was not computed (--stability 0), so the \
 reliability grade is at most `medium`.";
 
+/// Note when the user stopped the run (Ctrl-C).
+pub const INTERRUPTED_NOTE: &str = "The run was interrupted: equation search stopped early and \
+kept the best equations found so far, and structural stability was not computed. Results \
+depend on when it stopped, so the same seed may give different equations.";
+
+/// Note when `--time-budget` ran out.
+pub const TIME_BUDGET_NOTE: &str = "The time budget ran out: equation search stopped early and \
+kept the best equations found so far, and structural stability was not computed. Results \
+depend on machine speed, so the same seed may give different equations.";
+
 /// Note attached to suggestions (R19.8).
 pub const SUGGEST_NOTE: &str = "Suggestions are proposals of where to measure next, chosen to reduce \
 uncertainty or to test settings that look promising. They are not predictions that a goal will be \
@@ -49,6 +59,8 @@ mod tests {
             OBSERVATIONAL_FIT_NOTE,
             OBSERVATIONAL_OPTIMIZE_DISCLAIMER,
             STABILITY_PENDING,
+            INTERRUPTED_NOTE,
+            TIME_BUDGET_NOTE,
         ] {
             let lower = t.to_lowercase();
             for p in BANNED_CAUSAL_PHRASES {

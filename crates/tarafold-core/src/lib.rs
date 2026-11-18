@@ -9,6 +9,7 @@ pub mod linalg;
 pub mod rng;
 pub mod split;
 pub mod stats;
+pub mod stop;
 
 pub use config::RunConfig;
 pub use data::{Column, Dataset, ExcludedColumn, SourceInfo};

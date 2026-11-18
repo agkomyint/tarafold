@@ -31,5 +31,5 @@ normal issue), and running `serve --host 0.0.0.0` on an untrusted network by cho
 Each release includes `SHA256SUMS`, a CycloneDX SBOM, and GitHub build-provenance attestations:
 
 ```sh
-gh attestation verify tarafold-<version>-<target>.tar.gz --repo <owner>/tarafold
+gh attestation verify tarafold-<version>-<target>.tar.gz --repo agkomyint/tarafold
 ```

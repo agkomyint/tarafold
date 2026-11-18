@@ -405,7 +405,7 @@ pub(crate) fn search(
     let mut hof: Vec<Option<Member>> = vec![None; cfg.max_complexity + 1];
     let mut epoch: u64 = 0;
     let total = |isl: &[Island]| isl.iter().map(|i| i.evals).sum::<usize>();
-    while total(&islands) < cfg.max_evals {
+    while total(&islands) < cfg.max_evals && !tarafold_core::stop::requested() {
         islands.par_iter_mut().enumerate().for_each(|(k, isl)| {
             let mut rng = Rng::derive(seed, &[stream::DISCOVER, 2, k as u64, epoch]);
             isl.evolve(&data, cfg, &mut rng);

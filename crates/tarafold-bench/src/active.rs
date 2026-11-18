@@ -26,6 +26,16 @@ const START_ROWS: usize = 30;
 const BATCH: usize = 5;
 const ROUNDS: usize = 8;
 const NOISE: f64 = 0.05;
+/// Starting rows cover only the lowest `START_FRAC` of every input's range (an "operating
+/// region" from past work); all methods may search the full range.
+const START_FRAC: f64 = 0.4;
+/// The goal is the true value at this fraction of every input's range, outside the start region.
+const GOAL_FRAC: f64 = 0.85;
+/// A goal counts as met when the true value at a candidate is within this fraction of the
+/// target's range over the full input box.
+const GOAL_TOL: f64 = 0.02;
+/// Candidates checked against the truth per round (the ones a user would try first).
+const CHECK_TOP: usize = 3;
 
 /// Experiment-selection method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +74,13 @@ pub struct ActiveReport {
     pub median_to_goal: BTreeMap<String, f64>,
     /// Median experiments to recovery per method.
     pub median_to_recovery: BTreeMap<String, f64>,
+    /// Mean experiments to goal per method (unreached counts as budget + batch).
+    pub mean_to_goal: BTreeMap<String, f64>,
+    /// Mean experiments to recovery per method.
+    pub mean_to_recovery: BTreeMap<String, f64>,
+    /// T12 threshold: median to goal at most 60% of random, and on aggregate (mean) no worse
+    /// than Latin-hypercube sampling.
+    pub t12_met: bool,
     /// Budget of added experiments per loop.
     pub budget: usize,
 }
@@ -92,21 +109,78 @@ fn snap(entry: &Entry, name: &str, v: f64) -> f64 {
     }
 }
 
+/// Run the experiment at `inputs`: the true row plus Gaussian noise on the target.
+fn experiment(
+    entry: &Entry,
+    headers: &[String],
+    ti: usize,
+    inputs: &[(String, f64)],
+    sd: f64,
+    rng: &mut Rng,
+) -> Option<Vec<f64>> {
+    let row = evaluate_row(entry, inputs).ok()?;
+    let mut out = Vec::with_capacity(headers.len());
+    for (j, h) in headers.iter().enumerate() {
+        let mut v = row
+            .iter()
+            .find(|(n, _)| n == h)
+            .map_or(f64::NAN, |(_, v)| *v);
+        if j == ti {
+            v += sd * rng.normal();
+        }
+        out.push(v);
+    }
+    out.iter().all(|v| v.is_finite()).then_some(out)
+}
+
 /// Run one loop.
 pub fn run_loop(dataset: &str, method: Method, seed: u64) -> Option<LoopResult> {
     let entry = find(dataset).ok()?;
-    let g = generate(&entry, START_ROWS, NOISE, 0, seed).ok()?;
-    let mut headers = g.headers.clone();
-    let mut cols = g.columns.clone();
+    let g = generate(&entry, START_ROWS, 0.0, 0, seed).ok()?;
+    let headers = g.headers.clone();
     let target = entry.target;
     let ti = headers.iter().position(|h| h == target)?;
-    let sd = stats::std(&cols[ti]) * NOISE;
     let truth = parse(&g.truth.equation, &g.truth.features).ok()?;
     let ranges = input_ranges(&entry);
     let mut rng = Rng::derive(seed, &[stream::SYNTH, 900, method as u64]);
+    let fresh = generate(&entry, 500, 0.0, 0, seed + 77).ok()?;
+    let fy = fresh.columns.last()?;
+    let y_range = fy.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        - fy.iter().copied().fold(f64::INFINITY, f64::min);
+    let goal_tol = GOAL_TOL * y_range;
+    let at = |frac: f64| -> Vec<(String, f64)> {
+        ranges
+            .iter()
+            .map(|(n, lo, hi)| (n.to_string(), snap(&entry, n, lo + frac * (hi - lo))))
+            .collect()
+    };
+    let goal = evaluate_row(&entry, &at(GOAL_FRAC))
+        .ok()?
+        .into_iter()
+        .find(|(n, _)| n == target)?
+        .1;
+    let sd = stats::std(fy) * NOISE;
+    // Start rows: the same for every method (seeded by the loop seed only).
+    let mut start_rng = Rng::derive(seed, &[stream::SYNTH, 901]);
+    let mut cols: Vec<Vec<f64>> = vec![Vec::new(); headers.len()];
+    let mut tries = 0;
+    while cols[0].len() < START_ROWS && tries < 10 * START_ROWS {
+        tries += 1;
+        let inputs: Vec<(String, f64)> = ranges
+            .iter()
+            .map(|(n, lo, hi)| {
+                let v = start_rng.range(*lo, lo + START_FRAC * (hi - lo));
+                (n.to_string(), snap(&entry, n, v))
+            })
+            .collect();
+        if let Some(row) = experiment(&entry, &headers, ti, &inputs, sd, &mut start_rng) {
+            for (c, v) in cols.iter_mut().zip(row) {
+                c.push(v);
+            }
+        }
+    }
     let mut to_goal = None;
     let mut to_rec = None;
-    let fresh = generate(&entry, 500, 0.0, 0, seed + 77).ok()?;
     for round in 0..=ROUNDS {
         let added = round * BATCH;
         let data = read_csv(
@@ -120,8 +194,12 @@ pub fn run_loop(dataset: &str, method: Method, seed: u64) -> Option<LoopResult> 
             seed,
             ..Default::default()
         };
-        cfg.optimize.goal = Some(entry.example_goal);
+        cfg.optimize.goal = Some(goal);
         cfg.optimize.controllables = entry.controllables.iter().map(|s| s.to_string()).collect();
+        // Every method may use the full input box, whatever the data covers so far.
+        for (n, lo, hi) in &ranges {
+            cfg.optimize.bounds.insert(n.to_string(), [*lo, *hi]);
+        }
         for (n, step) in tarafold_synth::grid_steps(&entry) {
             if step == 1.0 {
                 cfg.optimize.integer.push(n.into());
@@ -137,18 +215,18 @@ pub fn run_loop(dataset: &str, method: Method, seed: u64) -> Option<LoopResult> 
         let Ok((report, _)) = tarafold_engine::run(&data, &cfg) else {
             break;
         };
-        // Goal reached under the truth?
+        // Goal reached under the truth by one of the first candidates?
         if to_goal.is_none()
             && let Some(o) = &report.optimize
         {
-            let hit = o.candidates.iter().filter(|c| c.within_tolerance).any(|c| {
+            let hit = o.candidates.iter().take(CHECK_TOP).any(|c| {
                 let x: Option<Vec<f64>> = g
                     .truth
                     .features
                     .iter()
                     .map(|n| c.inputs.get(n).or(o.baseline.get(n)).copied())
                     .collect();
-                x.is_some_and(|x| (truth.eval_point(&x) - entry.example_goal).abs() <= o.tolerance)
+                x.is_some_and(|x| (truth.eval_point(&x) - goal).abs() <= goal_tol)
             });
             if hit {
                 to_goal = Some(added);
@@ -254,21 +332,12 @@ pub fn run_loop(dataset: &str, method: Method, seed: u64) -> Option<LoopResult> 
             break;
         }
         for inputs in batch {
-            let Ok(row) = evaluate_row(&entry, &inputs) else {
-                continue;
-            };
-            for (j, h) in headers.iter().enumerate() {
-                let mut v = row
-                    .iter()
-                    .find(|(n, _)| n == h)
-                    .map_or(f64::NAN, |(_, v)| *v);
-                if j == ti {
-                    v += sd * rng.normal();
+            if let Some(row) = experiment(&entry, &headers, ti, &inputs, sd, &mut rng) {
+                for (c, v) in cols.iter_mut().zip(row) {
+                    c.push(v);
                 }
-                cols[j].push(v);
             }
         }
-        headers = headers.clone();
     }
     Some(LoopResult {
         dataset: dataset.into(),
@@ -305,8 +374,18 @@ pub fn run_active(seeds: &[u64], mut progress: impl FnMut(&LoopResult)) -> Activ
             stats::median(&v)
         }
     };
+    let mean = |m: Method, f: &dyn Fn(&LoopResult) -> Option<usize>| -> f64 {
+        let v: Vec<f64> = loops
+            .iter()
+            .filter(|l| l.method == m)
+            .map(|l| f(l).map_or((budget + BATCH) as f64, |x| x as f64))
+            .collect();
+        stats::mean(&v)
+    };
     let mut median_to_goal = BTreeMap::new();
     let mut median_to_recovery = BTreeMap::new();
+    let mut mean_to_goal = BTreeMap::new();
+    let mut mean_to_recovery = BTreeMap::new();
     for (k, m) in [
         ("suggest", Method::Suggest),
         ("random", Method::Random),
@@ -314,11 +393,18 @@ pub fn run_active(seeds: &[u64], mut progress: impl FnMut(&LoopResult)) -> Activ
     ] {
         median_to_goal.insert(k.to_string(), med(m, &|l| l.experiments_to_goal));
         median_to_recovery.insert(k.to_string(), med(m, &|l| l.experiments_to_recovery));
+        mean_to_goal.insert(k.to_string(), mean(m, &|l| l.experiments_to_goal));
+        mean_to_recovery.insert(k.to_string(), mean(m, &|l| l.experiments_to_recovery));
     }
+    let t12_met = median_to_goal["suggest"] <= 0.6 * median_to_goal["random"]
+        && mean_to_goal["suggest"] <= mean_to_goal["lhs"];
     ActiveReport {
         loops,
         median_to_goal,
         median_to_recovery,
+        mean_to_goal,
+        mean_to_recovery,
+        t12_met,
         budget,
     }
 }
@@ -329,8 +415,13 @@ pub fn markdown(r: &ActiveReport) -> String {
     let _ = writeln!(s, "## Tarafold bench: active (closed-loop) suite\n");
     let _ = writeln!(
         s,
-        "Start with {START_ROWS} rows; add {BATCH} experiments per round for up to {ROUNDS} rounds ({} max); noise {NOISE}.\n",
-        r.budget
+        "Start with {START_ROWS} rows covering the lowest {:.0}% of each input's range; add {BATCH} experiments per round for up to {ROUNDS} rounds ({} max); noise {NOISE} x std(y). \
+         The goal is the true value at {:.0}% of each range; it counts as met when one of the first {CHECK_TOP} candidates is within {:.0}% of the target's range under the true equation. \
+         All methods search the full input box.\n",
+        START_FRAC * 100.0,
+        r.budget,
+        GOAL_FRAC * 100.0,
+        GOAL_TOL * 100.0
     );
     let _ = writeln!(
         s,
@@ -351,16 +442,21 @@ pub fn markdown(r: &ActiveReport) -> String {
     }
     let _ = writeln!(
         s,
-        "\n| method | median experiments to goal | median experiments to recovery |"
+        "\n| method | median to goal | mean to goal | median to recovery | mean to recovery |"
     );
-    let _ = writeln!(s, "|---|---|---|");
+    let _ = writeln!(s, "|---|---|---|---|---|");
     for k in ["suggest", "random", "lhs"] {
         let _ = writeln!(
             s,
-            "| {k} | {:.1} | {:.1} |",
-            r.median_to_goal[k], r.median_to_recovery[k]
+            "| {k} | {:.1} | {:.1} | {:.1} | {:.1} |",
+            r.median_to_goal[k], r.mean_to_goal[k], r.median_to_recovery[k], r.mean_to_recovery[k]
         );
     }
+    let _ = writeln!(
+        s,
+        "\nT12 threshold (median to goal <= 60% of random, mean no worse than LHS): {}",
+        if r.t12_met { "met" } else { "NOT met" }
+    );
     let _ = writeln!(
         s,
         "\nUnreached loops count as {} experiments in the medians.",

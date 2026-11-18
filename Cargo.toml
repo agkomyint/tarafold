@@ -43,6 +43,7 @@ jsonschema = { version = "0.61.2", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+missing_docs = "warn"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

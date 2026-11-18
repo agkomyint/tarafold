@@ -27,8 +27,75 @@ const LONG_VERSION: &str = concat!(
 #[derive(Parser)]
 #[command(name = "tarafold", version, long_version = LONG_VERSION, about, max_term_width = 100)]
 struct Cli {
+    /// More detail on stderr (-v: stage timings; -vv: also configuration).
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    verbose: u8,
+    /// Also write log messages to this file.
+    #[arg(long, global = true, value_name = "FILE")]
+    log_file: Option<PathBuf>,
+    /// Worker threads (default: all cores). Results do not depend on it.
+    #[arg(long, global = true)]
+    threads: Option<usize>,
     #[command(subcommand)]
     command: Command,
+}
+
+/// Minimal logger for `-v` and `--log-file`. It logs settings and timings, never data values.
+struct Log {
+    level: u8,
+    file: Option<std::sync::Mutex<fs::File>>,
+}
+
+impl Log {
+    fn msg(&self, level: u8, text: &str) {
+        if self.level >= level {
+            eprintln!("{text}");
+        }
+        if let Some(f) = &self.file
+            && let Ok(mut f) = f.lock()
+        {
+            use std::io::Write as _;
+            let _ = writeln!(f, "{text}");
+        }
+    }
+}
+
+static LOG: std::sync::OnceLock<Log> = std::sync::OnceLock::new();
+
+fn log(level: u8, text: &str) {
+    if let Some(l) = LOG.get() {
+        l.msg(level, text);
+    }
+}
+
+/// Parse `90s`, `5m`, `1h`, or plain seconds.
+fn parse_duration(s: &str) -> Result<std::time::Duration, Failure> {
+    let s = s.trim();
+    let (num_part, mult) = match s.chars().last() {
+        Some('s') => (&s[..s.len() - 1], 1.0),
+        Some('m') => (&s[..s.len() - 1], 60.0),
+        Some('h') => (&s[..s.len() - 1], 3600.0),
+        _ => (s, 1.0),
+    };
+    let v = num(num_part, "--time-budget")? * mult;
+    if v <= 0.0 {
+        return Err(usage("--time-budget must be positive"));
+    }
+    Ok(std::time::Duration::from_secs_f64(v))
+}
+
+/// First Ctrl-C stops the search and still writes the report; a second one exits.
+fn install_ctrl_c() {
+    let _ = ctrlc::set_handler(|| {
+        if tarafold_core::stop::interrupted() {
+            eprintln!("\nStopped.");
+            std::process::exit(130);
+        }
+        tarafold_core::stop::interrupt();
+        eprintln!(
+            "\nStopping: keeping the equations found so far and writing the report (Ctrl-C again to quit)."
+        );
+    });
 }
 
 #[derive(Subcommand)]
@@ -50,6 +117,84 @@ enum Command {
     Relate(RelateArgs),
     /// Print the JSON Schema of report.json.
     Schema,
+    /// Export an equation as standalone code (Python, JavaScript, SQL, Excel, LaTeX, JSON).
+    Export(ExportArgs),
+    /// Rebuild report.html for a saved report.
+    Report(ReportArgs),
+    /// Open the interactive workspace in the browser, served from this machine only.
+    #[cfg(feature = "serve")]
+    Serve(ServeArgs),
+}
+
+/// `tarafold serve <report-dir|csv>`.
+#[cfg(feature = "serve")]
+#[derive(Args)]
+struct ServeArgs {
+    /// A report directory from `tarafold run`, or a CSV file (then --target is required).
+    input: PathBuf,
+    /// Target column(s) when serving a CSV.
+    #[arg(long, short, value_delimiter = ',')]
+    target: Vec<String>,
+    /// The CSV a report was built from (default: the path recorded in the report).
+    #[arg(long)]
+    data: Option<String>,
+    /// Port (0 picks a free one).
+    #[arg(long, default_value_t = 0)]
+    port: u16,
+    /// Address to bind. Anything other than loopback exposes the server to your network.
+    #[arg(long, default_value = "127.0.0.1")]
+    host: std::net::IpAddr,
+    /// Do not open the browser.
+    #[arg(long)]
+    no_open: bool,
+}
+
+/// `tarafold report <report-dir>`.
+#[derive(Args)]
+struct ReportArgs {
+    /// Directory with report.json from an earlier `tarafold run`.
+    report_dir: PathBuf,
+    /// Write report.html (the default and only output for now).
+    #[arg(long, default_value_t = true)]
+    html: bool,
+    /// The CSV the report was built from (default: the path recorded in the report).
+    #[arg(long)]
+    data: Option<String>,
+    /// Do not embed a data sample.
+    #[arg(long)]
+    no_data: bool,
+    /// Open report.html in the default browser.
+    #[arg(long)]
+    open: bool,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ExportTo {
+    Python,
+    Js,
+    Sql,
+    Excel,
+    Latex,
+    Json,
+}
+
+/// `tarafold export <report-dir>`.
+#[derive(Args)]
+struct ExportArgs {
+    /// Directory with report.json from an earlier `tarafold run`.
+    report_dir: PathBuf,
+    /// Output language.
+    #[arg(long, value_enum)]
+    to: ExportTo,
+    /// Target to export (default: the first target).
+    #[arg(long, short)]
+    target: Option<String>,
+    /// Front equation id (default: the selected equation).
+    #[arg(long)]
+    id: Option<usize>,
+    /// Write to this file instead of stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -233,7 +378,13 @@ struct RunArgs {
     /// Seed for all randomness.
     #[arg(long)]
     seed: Option<u64>,
-    /// TOML config file (flags override it).
+    /// Equation-search budget in expression evaluations (default 240000).
+    #[arg(long)]
+    max_evals: Option<usize>,
+    /// Stop equation search after this long (e.g. `90s`, `5m`) and keep what was found.
+    /// A stopped search depends on machine speed; `--max-evals` keeps runs reproducible.
+    #[arg(long)]
+    time_budget: Option<String>,
     #[arg(long)]
     config: Option<PathBuf>,
     /// Computation engine. Only `classical` is available in this build.
@@ -242,6 +393,9 @@ struct RunArgs {
     /// Output directory.
     #[arg(long, default_value = "tarafold-out")]
     out: PathBuf,
+    /// Open report.html in the default browser when done.
+    #[arg(long)]
+    open: bool,
     /// Output format on stdout.
     #[arg(long, value_enum, default_value = "human")]
     format: Format,
@@ -488,6 +642,9 @@ fn build_config(a: &RunArgs) -> Result<RunConfig, Failure> {
     if let Some(v) = a.seed {
         cfg.seed = v;
     }
+    if let Some(m) = a.max_evals {
+        cfg.discover.gp.max_evals = m.clamp(1_000, 1_000_000_000);
+    }
     if a.exclude_other_targets {
         cfg.exclude_other_targets = true;
     }
@@ -572,7 +729,25 @@ fn cmd_run(a: &RunArgs) -> Result<u8, Failure> {
             data.source.path
         );
     }
-    let (report, outcome) = tarafold_engine::run(&data, &cfg)?;
+    let (report, outcome) = {
+        let budget = a.time_budget.as_deref().map(parse_duration).transpose()?;
+        tarafold_core::stop::set_deadline(budget.map(|d| std::time::Instant::now() + d));
+        install_ctrl_c();
+        log(
+            2,
+            &format!(
+                "configuration:\n{}",
+                toml::to_string_pretty(&cfg).unwrap_or_default()
+            ),
+        );
+        tarafold_engine::run(&data, &cfg)?
+    };
+    for s in &report.run.stages {
+        log(1, &format!("stage {:<28} {:>8} ms", s.name, s.millis));
+    }
+    if report.run.status == tarafold_report::RunStatus::Interrupted {
+        eprintln!("Run interrupted; writing what was found so far.");
+    }
 
     fs::create_dir_all(&a.out).with_context(|| format!("creating {}", a.out.display()))?;
     let json = report.to_json()?;
@@ -583,6 +758,10 @@ fn cmd_run(a: &RunArgs) -> Result<u8, Failure> {
         toml::to_string_pretty(&cfg).map_err(|e| anyhow!("serializing run.toml: {e}"))?;
     write(&a.out, "run.toml", &toml_text)?;
     write_suggestions(&a.out, &report, &data)?;
+    write_html(&a.out, &report, Some(&data))?;
+    if a.open {
+        open_in_browser(&a.out.join("report.html"));
+    }
 
     match a.format {
         Format::Json => println!("{json}"),
@@ -603,7 +782,7 @@ fn cmd_bench(a: &BenchArgs) -> Result<u8, Failure> {
         SuiteArg::Full => tarafold_bench::Suite::Full,
         SuiteArg::Active => {
             let tty = std::io::stderr().is_terminal();
-            let r = tarafold_bench::active::run_active(&[1, 2], |l| {
+            let r = tarafold_bench::active::run_active(&[1, 2, 3], |l| {
                 if tty {
                     eprintln!(
                         "{} {:?} seed {}: goal after {:?}, recovery after {:?}",
@@ -854,6 +1033,178 @@ fn write_suggestions(
     )
 }
 
+/// Rows of the input data embedded in report.html for charts.
+const HTML_SAMPLE_ROWS: usize = 20_000;
+
+fn write_html(
+    dir: &Path,
+    report: &tarafold_report::Report,
+    data: Option<&tarafold_core::Dataset>,
+) -> Result<(), Failure> {
+    use tarafold_report::html::{DataSample, report_html};
+    let sample = data.map(|d| DataSample::from_dataset(d, HTML_SAMPLE_ROWS));
+    write(dir, "report.html", &report_html(report, sample.as_ref())?)
+}
+
+/// Open a file with the system's default handler. Failures are reported, not fatal.
+fn open_in_browser(path: &Path) {
+    let r = if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(path)
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(path).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(path).spawn()
+    };
+    if let Err(e) = r {
+        eprintln!("note: could not open {}: {e}", path.display());
+    }
+}
+
+fn cmd_report(a: &ReportArgs) -> Result<u8, Failure> {
+    let report = read_report(&a.report_dir)?;
+    let data = if a.no_data {
+        None
+    } else {
+        let path = a
+            .data
+            .clone()
+            .unwrap_or_else(|| report.dataset.source.path.clone());
+        let opts = IngestOptions {
+            required: report.run.config.targets.clone(),
+            ..Default::default()
+        };
+        match load(&path, &opts) {
+            Ok(d) => Some(d),
+            Err(f) => {
+                eprintln!(
+                    "note: data not embedded ({:#}); pass --data <csv> to include it",
+                    f.error
+                );
+                None
+            }
+        }
+    };
+    write_html(&a.report_dir, &report, data.as_ref())?;
+    let p = a.report_dir.join("report.html");
+    println!("Wrote {}", p.display());
+    if a.open {
+        open_in_browser(&p);
+    }
+    Ok(0)
+}
+
+#[cfg(feature = "serve")]
+fn cmd_serve(a: &ServeArgs) -> Result<u8, Failure> {
+    let (report, data) = if a.input.is_dir() {
+        let report = read_report(&a.input)?;
+        let path = a
+            .data
+            .clone()
+            .unwrap_or_else(|| report.dataset.source.path.clone());
+        let opts = IngestOptions {
+            required: report.run.config.targets.clone(),
+            ..Default::default()
+        };
+        let data = match load(&path, &opts) {
+            Ok(d) => Some(d),
+            Err(f) => {
+                eprintln!(
+                    "note: data not loaded ({:#}); charts and re-runs need --data <csv>",
+                    f.error
+                );
+                None
+            }
+        };
+        (report, data)
+    } else {
+        if a.target.is_empty() {
+            return Err(usage("serving a CSV needs --target"));
+        }
+        let input = a.input.to_string_lossy().to_string();
+        let opts = IngestOptions {
+            required: a.target.clone(),
+            ..Default::default()
+        };
+        let data = load(&input, &opts)?;
+        let cfg = RunConfig {
+            targets: a.target.iter().map(|t| t.trim().to_string()).collect(),
+            ..Default::default()
+        };
+        eprintln!("Running discovery for {} ...", cfg.targets.join(", "));
+        let (report, _) = tarafold_engine::run(&data, &cfg)?;
+        (report, Some(data))
+    };
+    if !a.host.is_loopback() {
+        eprintln!(
+            "warning: binding {} makes the workspace reachable from your network; anyone with the URL can use it",
+            a.host
+        );
+    }
+    let running = tarafold_server::start(tarafold_server::ServeOptions {
+        addr: std::net::SocketAddr::new(a.host, a.port),
+        report,
+        data,
+        token: None,
+    })
+    .map_err(|e| anyhow!(e.to_string()))?;
+    let url = running.url();
+    println!("Tarafold workspace: {url}");
+    println!("The token in the URL is required; keep it private. Press Ctrl-C to stop.");
+    if !a.no_open {
+        open_url(&url);
+    }
+    running.wait().map_err(|e| anyhow!(e.to_string()))?;
+    Ok(0)
+}
+
+#[cfg(feature = "serve")]
+fn open_url(url: &str) {
+    let r = if cfg!(target_os = "windows") {
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(url).spawn()
+    };
+    if let Err(e) = r {
+        eprintln!("note: could not open a browser ({e}); open the URL above");
+    }
+}
+
+fn read_report(report_dir: &Path) -> Result<tarafold_report::Report, Failure> {
+    let rp = report_dir.join("report.json");
+    let text = fs::read_to_string(&rp).with_context(|| format!("reading {}", rp.display()))?;
+    tarafold_report::Report::from_json(&text)
+        .map_err(|e| usage(format!("{} is not a Tarafold report: {e}", rp.display())))
+}
+
+fn cmd_export(a: &ExportArgs) -> Result<u8, Failure> {
+    use tarafold_report::export::{ExportFormat, export};
+    let report = read_report(&a.report_dir)?;
+    let fmt = match a.to {
+        ExportTo::Python => ExportFormat::Python,
+        ExportTo::Js => ExportFormat::Js,
+        ExportTo::Sql => ExportFormat::Sql,
+        ExportTo::Excel => ExportFormat::Excel,
+        ExportTo::Latex => ExportFormat::Latex,
+        ExportTo::Json => ExportFormat::Json,
+    };
+    let code = export(&report, a.target.as_deref(), a.id, fmt).map_err(|e| usage(e.0))?;
+    match &a.out {
+        Some(p) => {
+            fs::write(p, &code).with_context(|| format!("writing {}", p.display()))?;
+            eprintln!("Wrote {}", p.display());
+        }
+        None => print!("{code}"),
+    }
+    Ok(0)
+}
+
 /// `tarafold optimize|suggest <report-dir>`: reload the report and data, apply new goals, rerun
 /// optimization and/or suggestions.
 fn cmd_saved(
@@ -864,10 +1215,7 @@ fn cmd_saved(
     format: Format,
     suggest: Option<SuggestConfig>,
 ) -> Result<u8, Failure> {
-    let rp = report_dir.join("report.json");
-    let text = fs::read_to_string(&rp).with_context(|| format!("reading {}", rp.display()))?;
-    let saved = tarafold_report::Report::from_json(&text)
-        .map_err(|e| usage(format!("{} is not a Tarafold report: {e}", rp.display())))?;
+    let saved = read_report(report_dir)?;
     if saved.dataset.weighted {
         return Err(usage(
             "this report used row weights; re-run `tarafold run` with --weights instead",
@@ -898,6 +1246,7 @@ fn cmd_saved(
     write(out, "report.json", &json)?;
     write(out, "candidates.csv", &report.candidates_csv()?)?;
     write_suggestions(out, &report, &data)?;
+    write_html(out, &report, Some(&data))?;
     match format {
         Format::Json => println!("{json}"),
         Format::Human => {
@@ -954,6 +1303,27 @@ fn cmd_synth(a: &SynthArgs) -> Result<u8, Failure> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let file = match &cli.log_file {
+        Some(p) => match fs::File::create(p) {
+            Ok(f) => Some(std::sync::Mutex::new(f)),
+            Err(e) => {
+                eprintln!("error: cannot open log file {}: {e}", p.display());
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
+    let _ = LOG.set(Log {
+        level: cli.verbose,
+        file,
+    });
+    if let Some(n) = cli.threads
+        && let Err(e) = rayon::ThreadPoolBuilder::new()
+            .num_threads(n.max(1))
+            .build_global()
+    {
+        eprintln!("warning: --threads ignored: {e}");
+    }
     let result = match &cli.command {
         Command::Run(a) => cmd_run(a),
         Command::Synth(a) => cmd_synth(a),
@@ -989,6 +1359,10 @@ fn main() -> ExitCode {
         }
         Command::Profile(a) => cmd_profile(a),
         Command::Relate(a) => cmd_relate(a),
+        Command::Export(a) => cmd_export(a),
+        Command::Report(a) => cmd_report(a),
+        #[cfg(feature = "serve")]
+        Command::Serve(a) => cmd_serve(a),
         Command::Schema => tarafold_report::schema_json()
             .map_err(Failure::from)
             .map(|s| {

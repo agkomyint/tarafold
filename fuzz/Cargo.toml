@@ -1,0 +1,46 @@
+[package]
+name = "tarafold-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tarafold-io = { path = "../crates/tarafold-io" }
+tarafold-expr = { path = "../crates/tarafold-expr" }
+tarafold-optimize = { path = "../crates/tarafold-optimize" }
+
+# Not part of the main workspace: cargo-fuzz needs a nightly toolchain.
+[workspace]
+
+[[bin]]
+name = "csv_ingest"
+path = "fuzz_targets/csv_ingest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "infix_parser"
+path = "fuzz_targets/infix_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "constraint_parser"
+path = "fuzz_targets/constraint_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "goal_parser"
+path = "fuzz_targets/goal_parser.rs"
+test = false
+doc = false
+bench = false

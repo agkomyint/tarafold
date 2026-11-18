@@ -3,6 +3,8 @@
 //! The JSON Schema printed by `tarafold schema` is generated from these types, so the
 //! schema and the writer cannot drift.
 
+pub mod export;
+pub mod html;
 mod read;
 pub mod text;
 

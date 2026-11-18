@@ -48,6 +48,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked
       - run: cargo test --workspace --locked
+        env:
+          # Python and Node are on every hosted runner; export golden tests must not skip.
+          TARAFOLD_REQUIRE_EXPORT_RUNTIMES: "1"
       - name: Docs
         run: cargo doc --workspace --no-deps --locked
         env:
