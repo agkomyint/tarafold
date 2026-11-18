@@ -475,3 +475,52 @@ button:disabled {
 .tex math {
   font-size: 1.1em;
 }
+
+.data-table {
+  max-height: 560px;
+  overflow: auto;
+}
+
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.data-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+button.sort {
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-weight: 600;
+  border-radius: 0;
+}
+
+th.role-target,
+.legend-chip.role-target {
+  background: #fde9d9;
+}
+
+th.role-controllable,
+.legend-chip.role-controllable {
+  background: #cfe4f5;
+}
+
+td.role-controllable {
+  background: #f1f7fc;
+}
+
+td.role-target {
+  background: #fff6ef;
+}
+
+.legend-chip {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.8rem;
+}

@@ -3,6 +3,7 @@ import { EvidenceBadge, GradeBadge } from "./components";
 import { Ctx, useApp, type AppState } from "./ctx";
 import type { Loaded, ProgressEvent } from "./report/load";
 import type { Report } from "./report/schema";
+import { Data } from "./views/Data";
 import { Equations } from "./views/Equations";
 import { Experiments } from "./views/Experiments";
 import { Explore } from "./views/Explore";
@@ -13,6 +14,7 @@ import { Target } from "./views/Target";
 
 const VIEWS = [
   { id: "overview", label: "Overview", el: Overview },
+  { id: "data", label: "Data", el: Data },
   { id: "explore", label: "Explore", el: Explore },
   { id: "relationships", label: "Relationships", el: Relationships },
   { id: "equations", label: "Equations", el: Equations },

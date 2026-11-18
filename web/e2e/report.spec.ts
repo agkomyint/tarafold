@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { binary, OUT } from "./setup";
 
-const VIEWS = ["Overview", "Explore", "Relationships", "Equations", "Target", "Next experiments", "Reliability"];
+const VIEWS = ["Overview", "Data", "Explore", "Relationships", "Equations", "Target", "Next experiments", "Reliability"];
 
 function watchErrors(page: Page): string[] {
   const errors: string[] = [];

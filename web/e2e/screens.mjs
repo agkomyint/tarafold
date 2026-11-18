@@ -10,7 +10,7 @@ const browser = await chromium.launch({ channel: process.env.PW_CHANNEL || undef
 const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
 page.on("pageerror", (e) => console.log("pageerror:", String(e)));
 await page.goto(pathToFileURL(resolve(file)).href);
-const tabs = ["Overview", "Explore", "Relationships", "Equations", "Target", "Next experiments", "Reliability"];
+const tabs = ["Overview", "Data", "Explore", "Relationships", "Equations", "Target", "Next experiments", "Reliability"];
 for (const [i, v] of tabs.entries()) {
   await page.getByRole("tab", { name: v }).click();
   await page.waitForTimeout(300);

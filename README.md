@@ -31,7 +31,9 @@ cargo build --release -p tarafold-cli
 ./target/release/tarafold bench --suite full --baseline bench/baseline.json   # score vs. truth
 ```
 
-User guide: [docs/user-guide.md](docs/user-guide.md). How the algorithms work:
+User guide: [docs/user-guide.md](docs/user-guide.md). What it is for: [docs/use-cases.md](docs/use-cases.md).
+Five worked examples with data and real output: [docs/case-studies](docs/case-studies/README.md).
+How the algorithms work:
 [docs/algorithms.md](docs/algorithms.md). Report format: [docs/report-schema.md](docs/report-schema.md).
 
 ## Quick look
