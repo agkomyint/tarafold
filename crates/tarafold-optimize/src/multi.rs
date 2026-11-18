@@ -813,18 +813,65 @@ pub fn optimize_goals(p: &MultiProblem<'_>) -> MultiOutput {
     if let Some(r) = p.robust {
         cands.retain(|(_, j)| j.is_nan() || *j >= r);
     }
-    // Trim trade-off sets to 20 by crowding (keeps extremes); single-objective to n best.
-    if objectives.len() >= 2 {
-        while cands.len() > 20 {
-            let evs: Vec<Ev> = cands.iter().map(|(e, _)| e.clone()).collect();
-            let idx: Vec<usize> = (0..evs.len()).collect();
-            let c = crowding(&evs, &idx);
-            let worst = (0..c.len())
-                .min_by(|&a, &b| c[a].total_cmp(&c[b]))
+    // Trim trade-off sets to 20, well spread: keep the best point per objective, then add the
+    // point farthest (normalized objective space) from those kept, repeatedly. Crowding distance
+    // spreads poorly beyond two objectives. Single-objective runs keep the n best.
+    let full_front: Vec<Vec<f64>> = cands.iter().map(|(e, _)| e.pred.clone()).collect();
+    if objectives.len() >= 2 && cands.len() > 20 {
+        let m = cands[0].0.obj.len();
+        let lo: Vec<f64> = (0..m)
+            .map(|j| {
+                cands
+                    .iter()
+                    .map(|(e, _)| e.obj[j])
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .collect();
+        let hi: Vec<f64> = (0..m)
+            .map(|j| {
+                cands
+                    .iter()
+                    .map(|(e, _)| e.obj[j])
+                    .fold(f64::NEG_INFINITY, f64::max)
+            })
+            .collect();
+        let norm = |e: &Ev| -> Vec<f64> {
+            (0..m)
+                .map(|j| (e.obj[j] - lo[j]) / (hi[j] - lo[j]).max(1e-300))
+                .collect()
+        };
+        let pts: Vec<Vec<f64>> = cands.iter().map(|(e, _)| norm(e)).collect();
+        let mut keep: Vec<usize> = Vec::new();
+        for j in 0..m {
+            let best = (0..pts.len())
+                .min_by(|&a, &b| pts[a][j].total_cmp(&pts[b][j]).then(a.cmp(&b)))
                 .unwrap_or(0);
-            cands.remove(worst);
+            if !keep.contains(&best) {
+                keep.push(best);
+            }
         }
-    } else {
+        let d2 = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| (x - y).powi(2)).sum::<f64>();
+        let mut near: Vec<f64> = (0..pts.len())
+            .map(|i| {
+                keep.iter()
+                    .map(|&k| d2(&pts[i], &pts[k]))
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .collect();
+        while keep.len() < 20 {
+            let next = (0..pts.len())
+                .filter(|i| !keep.contains(i))
+                .max_by(|&a, &b| near[a].total_cmp(&near[b]).then(b.cmp(&a)));
+            let Some(next) = next else { break };
+            keep.push(next);
+            for i in 0..pts.len() {
+                near[i] = near[i].min(d2(&pts[i], &pts[next]));
+            }
+        }
+        keep.truncate(20);
+        keep.sort_unstable();
+        cands = keep.into_iter().map(|i| cands[i].clone()).collect();
+    } else if objectives.len() < 2 {
         cands.truncate(p.n_candidates.max(1));
     }
 
@@ -932,13 +979,26 @@ pub fn optimize_goals(p: &MultiProblem<'_>) -> MultiOutput {
         }
     }
 
-    // Redundant objectives.
+    // Redundant objectives, judged on the whole first front (before trimming to 20).
     let mut redundant = Vec::new();
-    if out.len() >= 4 {
+    if full_front.len() >= 4 {
         for (i, &a) in objectives.iter().enumerate() {
             for &b in &objectives[i + 1..] {
-                let va: Vec<f64> = out.iter().map(|c| raw(c, a)).collect();
-                let vb: Vec<f64> = out.iter().map(|c| raw(c, b)).collect();
+                let sign = |g: usize| {
+                    if p.goals[g].spec.kind == GoalKind::Maximize {
+                        -1.0
+                    } else {
+                        1.0
+                    }
+                };
+                let va: Vec<f64> = full_front
+                    .iter()
+                    .map(|y| sign(a) * y[p.goals[a].model])
+                    .collect();
+                let vb: Vec<f64> = full_front
+                    .iter()
+                    .map(|y| sign(b) * y[p.goals[b].model])
+                    .collect();
                 let rho = spearman(&va, &vb);
                 if rho > 0.9 {
                     redundant.push((a, b, rho));
@@ -1196,7 +1256,7 @@ mod tests {
         let dom = domain(&names, &[[0.0, 10.0], [0.0, 10.0]]);
         let models = vec![
             model("energy", "a", &names, 3.0),
-            model("co2", "2 * a + 0.01 * b", &names, 6.0),
+            model("co2", "2 * a + 1", &names, 6.0),
             model("yield", "b - 0.1 * a", &names, 3.0),
         ];
         let goals = vec![

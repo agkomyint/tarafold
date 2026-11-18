@@ -76,6 +76,10 @@ pub struct DiscoverInput<'a> {
     pub val_x: &'a [Vec<f64>],
     /// Validation target.
     pub val_y: &'a [f64],
+    /// Training row weights (`None`: unweighted). Fits minimize `Σ w (y − f)²`.
+    pub train_w: Option<&'a [f64]>,
+    /// Validation row weights.
+    pub val_w: Option<&'a [f64]>,
     /// Settings.
     pub config: &'a DiscoverConfig,
     /// Seed for the stochastic search.
@@ -114,17 +118,42 @@ impl std::error::Error for DiscoverError {}
 
 /// Normalized MSE of `expr` on columns, `inf` when evaluation fails or is non-finite.
 pub fn nmse(expr: &Expr, x: &[Vec<f64>], y: &[f64]) -> f64 {
+    nmse_w(expr, x, y, None)
+}
+
+/// Weighted variance `Σ w (y − ȳ_w)² / Σ w` (plain population variance without weights).
+pub fn weighted_variance(y: &[f64], w: Option<&[f64]>) -> f64 {
+    match w {
+        None => stats::variance(y),
+        Some(w) => {
+            let sw: f64 = w.iter().sum();
+            if sw <= 0.0 {
+                return f64::NAN;
+            }
+            let m = y.iter().zip(w).map(|(a, b)| a * b).sum::<f64>() / sw;
+            y.iter()
+                .zip(w)
+                .map(|(a, b)| b * (a - m).powi(2))
+                .sum::<f64>()
+                / sw
+        }
+    }
+}
+
+/// Weighted normalized MSE: `Σ w r² / Σ w` over the weighted variance of `y`.
+pub fn nmse_w(expr: &Expr, x: &[Vec<f64>], y: &[f64], w: Option<&[f64]>) -> f64 {
     let refs: Vec<&[f64]> = x.iter().map(Vec::as_slice).collect();
     let Some(pred) = expr.eval_columns(&refs, y.len()) else {
         return f64::INFINITY;
     };
-    let var = stats::variance(y);
-    let mse = pred
-        .iter()
-        .zip(y)
-        .map(|(p, t)| (p - t) * (p - t))
-        .sum::<f64>()
-        / y.len() as f64;
+    let var = weighted_variance(y, w);
+    let (mut sse, mut sw) = (0.0, 0.0);
+    for (i, (p, t)) in pred.iter().zip(y).enumerate() {
+        let wi = w.map_or(1.0, |w| w[i]);
+        sse += wi * (p - t) * (p - t);
+        sw += wi;
+    }
+    let mse = sse / sw.max(1e-300);
     if !mse.is_finite() {
         return f64::INFINITY;
     }
@@ -197,10 +226,32 @@ fn snap_halves(c: &[f64]) -> Option<Vec<f64>> {
     (snapped != c).then_some(snapped)
 }
 
-/// Least-squares scale `k` for `y ≈ k·g`.
-fn fit_scale(g: &[f64], y: &[f64]) -> Option<f64> {
-    let gg: f64 = g.iter().map(|v| v * v).sum();
-    let gy: f64 = g.iter().zip(y).map(|(a, b)| a * b).sum();
+/// Weighted least squares: scale every column and `y` by `sqrt(w)`.
+fn lstsq_w(cols: &[Vec<f64>], y: &[f64], w: Option<&[f64]>) -> Option<Vec<f64>> {
+    match w {
+        None => linalg::lstsq(cols, y),
+        Some(w) => {
+            let s: Vec<f64> = w.iter().map(|v| v.max(0.0).sqrt()).collect();
+            let wc: Vec<Vec<f64>> = cols
+                .iter()
+                .map(|c| c.iter().zip(&s).map(|(a, b)| a * b).collect())
+                .collect();
+            let wy: Vec<f64> = y.iter().zip(&s).map(|(a, b)| a * b).collect();
+            linalg::lstsq(&wc, &wy)
+        }
+    }
+}
+
+/// Least-squares scale `k` for `y ≈ k·g`, weighted by `w`.
+fn fit_scale(g: &[f64], y: &[f64], w: Option<&[f64]>) -> Option<f64> {
+    let wi = |i: usize| w.map_or(1.0, |w| w[i]);
+    let gg: f64 = g.iter().enumerate().map(|(i, v)| wi(i) * v * v).sum();
+    let gy: f64 = g
+        .iter()
+        .zip(y)
+        .enumerate()
+        .map(|(i, (a, b))| wi(i) * a * b)
+        .sum();
     let k = gy / gg;
     (gg > 0.0 && k.is_finite()).then_some(k)
 }
@@ -244,18 +295,19 @@ impl Pool<'_> {
         if !self.seen.insert(key) {
             return false;
         }
-        let train_nmse = nmse(&expr, self.input.train_x, self.input.train_y);
-        let val_nmse = nmse(&expr, self.input.val_x, self.input.val_y);
+        let i = self.input;
+        let train_nmse = nmse_w(&expr, i.train_x, i.train_y, i.train_w);
+        let val_nmse = nmse_w(&expr, i.val_x, i.val_y, i.val_w);
         if !train_nmse.is_finite() || !val_nmse.is_finite() {
             return false;
         }
         let complexity = expr.complexity();
         if matches!(strategy, Strategy::LogLog | Strategy::LogTarget)
-            && let Some(refit) = lm::refine(&expr, self.input.train_x, self.input.train_y, 30)
+            && let Some(refit) = lm::refine_w(&expr, i.train_x, i.train_y, i.train_w, 30)
         {
             let key = format!("{:?}", refit.nodes());
-            let tn = nmse(&refit, self.input.train_x, self.input.train_y);
-            let vn = nmse(&refit, self.input.val_x, self.input.val_y);
+            let tn = nmse_w(&refit, i.train_x, i.train_y, i.train_w);
+            let vn = nmse_w(&refit, i.val_x, i.val_y, i.val_w);
             if tn.is_finite() && vn.is_finite() && self.seen.insert(key) {
                 self.cands.push(Candidate {
                     complexity: refit.complexity(),
@@ -286,6 +338,7 @@ fn sparse_linear(
 ) -> usize {
     let n = y.len();
     let m = enet_rows.min(n);
+    let w = pool.input.train_w;
     let cols: Vec<&[f64]> = terms.iter().map(|t| &t.train[..m]).collect();
     let mut added = 0;
     for support in all_supports(&cols, &y[..m], max_terms) {
@@ -294,7 +347,7 @@ fn sparse_linear(
         // With intercept.
         let mut with_c = vec![vec![1.0; n]];
         with_c.extend(raw.iter().cloned());
-        if let Some(c) = linalg::lstsq(&with_c, y) {
+        if let Some(c) = lstsq_w(&with_c, y, w) {
             for coefs in std::iter::once(c.clone()).chain(snap_integers(&c)) {
                 if pool.add(
                     linear_expr(Some(coefs[0]), &coefs[1..], &texprs),
@@ -305,7 +358,7 @@ fn sparse_linear(
             }
         }
         // Through the origin.
-        if let Some(c) = linalg::lstsq(&raw, y) {
+        if let Some(c) = lstsq_w(&raw, y, w) {
             for coefs in std::iter::once(c.clone()).chain(snap_integers(&c)) {
                 if pool.add(linear_expr(None, &coefs, &texprs), Strategy::SparseLinear) {
                     added += 1;
@@ -341,6 +394,7 @@ fn log_log(
         })
         .collect();
     let logy: Vec<f64> = rows.iter().map(|&i| y[i].ln()).collect();
+    let lw: Option<Vec<f64>> = input.train_w.map(|w| rows.iter().map(|&i| w[i]).collect());
     let n = y.len();
     let nl = logy.len();
     let m = enet_rows.min(nl);
@@ -349,7 +403,7 @@ fn log_log(
     for support in all_supports(&cols, &logy[..m], max_terms) {
         let mut a = vec![vec![1.0; nl]];
         a.extend(support.iter().map(|&j| logx[j].clone()));
-        let Some(c) = linalg::lstsq(&a, &logy) else {
+        let Some(c) = lstsq_w(&a, &logy, lw.as_deref()) else {
             continue;
         };
         let exps = c[1..].to_vec();
@@ -366,7 +420,9 @@ fn log_log(
             let Some(g) = g_expr.eval_columns(&refs, n) else {
                 continue;
             };
-            let Some(k) = fit_scale(&g, y) else { continue };
+            let Some(k) = fit_scale(&g, y, input.train_w) else {
+                continue;
+            };
             let expr = (Expr::constant(k) * g_expr.clone()).simplify();
             if pool.add(expr, Strategy::LogLog) {
                 added += 1;
@@ -395,6 +451,7 @@ fn log_target(
     let input = pool.input;
     let rows = positive_rows(y)?;
     let logy: Vec<f64> = rows.iter().map(|&i| y[i].ln()).collect();
+    let lw: Option<Vec<f64>> = input.train_w.map(|w| rows.iter().map(|&i| w[i]).collect());
     let sub: Vec<Vec<f64>> = terms
         .iter()
         .map(|t| rows.iter().map(|&i| t.train[i]).collect())
@@ -407,7 +464,7 @@ fn log_target(
     for support in all_supports(&cols, &logy[..m], max_terms) {
         let mut a = vec![vec![1.0; nl]];
         a.extend(support.iter().map(|&j| sub[j].clone()));
-        let Some(c) = linalg::lstsq(&a, &logy) else {
+        let Some(c) = lstsq_w(&a, &logy, lw.as_deref()) else {
             continue;
         };
         for coefs in std::iter::once(c[1..].to_vec()).chain(snap_halves(&c[1..])) {
@@ -436,7 +493,9 @@ fn log_target(
             if g.iter().any(|v| !v.is_finite()) {
                 continue;
             }
-            let Some(k) = fit_scale(&g, y) else { continue };
+            let Some(k) = fit_scale(&g, y, input.train_w) else {
+                continue;
+            };
             if pool.add((Expr::constant(k) * g_expr).simplify(), Strategy::LogTarget) {
                 added += 1;
             }
@@ -448,7 +507,12 @@ fn log_target(
 /// Refit the constants of a fixed structure by Levenberg–Marquardt (least squares on `y`).
 /// Returns the input unchanged when no improvement is found.
 pub fn refit_constants(expr: &Expr, x: &[Vec<f64>], y: &[f64]) -> Expr {
-    lm::refine(expr, x, y, 100).unwrap_or_else(|| expr.clone())
+    refit_constants_w(expr, x, y, None)
+}
+
+/// [`refit_constants`] with row weights.
+pub fn refit_constants_w(expr: &Expr, x: &[Vec<f64>], y: &[f64], w: Option<&[f64]>) -> Expr {
+    lm::refine_w(expr, x, y, w, 100).unwrap_or_else(|| expr.clone())
 }
 
 /// Pareto front over (complexity, validation NMSE), sorted by complexity.
@@ -664,7 +728,13 @@ pub fn discover(input: &DiscoverInput<'_>) -> Result<DiscoverOutput, DiscoverErr
     };
     let mut strategies = Vec::new();
 
-    pool.add(Expr::constant(stats::mean(y)), Strategy::Constant);
+    let mean_y = match input.train_w {
+        Some(w) => {
+            y.iter().zip(w).map(|(a, b)| a * b).sum::<f64>() / w.iter().sum::<f64>().max(1e-300)
+        }
+        None => stats::mean(y),
+    };
+    pool.add(Expr::constant(mean_y), Strategy::Constant);
     strategies.push(StrategyRun {
         strategy: Strategy::Constant,
         ran: true,
@@ -723,7 +793,15 @@ pub fn discover(input: &DiscoverInput<'_>) -> Result<DiscoverOutput, DiscoverErr
             .map(|&i| pool.cands[i].expr.clone())
             .collect();
         let unary = parse_operators(&cfg.gp.operators).map_err(DiscoverError::BadInput)?;
-        let (found, evals) = gp::search(input.train_x, y, &seeds, &cfg.gp, unary, input.seed);
+        let (found, evals) = gp::search(
+            input.train_x,
+            y,
+            input.train_w,
+            &seeds,
+            &cfg.gp,
+            unary,
+            input.seed,
+        );
         pool.evaluated += evals;
         let mut k = 0;
         for e in found {

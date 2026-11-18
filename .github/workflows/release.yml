@@ -11,10 +11,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The web UI (web/) is not built yet (Phase 7). When it exists, add a job that runs
-  # `pnpm --dir web build` and uploads web/dist so the build job can embed it.
+  # The single-file web UI, embedded into every binary (report.html and `tarafold serve`).
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm install -g pnpm@11
+      - run: pnpm --dir web install --frozen-lockfile
+      - run: pnpm --dir web build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-dist-single
+          path: web/dist-single/index.html
+          if-no-files-found: error
 
   build:
+    needs: web
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +42,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-dist-single
+          path: web/dist-single
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -45,6 +64,16 @@ jobs:
           else
             cargo build --release --locked -p tarafold-cli --target ${{ matrix.target }}
           fi
+      - name: Check the binary runs and embeds the UI
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/tarafold"
+          [ "${{ matrix.archive }}" = "zip" ] && bin="$bin.exe"
+          "$bin" --version
+          "$bin" synth linear --rows 300 --out check
+          "$bin" run check/data.csv --target y --stability 0 --out check/out > /dev/null
+          grep -q 'id="root"' check/out/report.html
       - name: Package
         shell: bash
         run: |

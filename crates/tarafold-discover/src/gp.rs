@@ -8,7 +8,7 @@
 
 use rayon::prelude::*;
 use tarafold_core::config::GpConfig;
-use tarafold_core::{Rng, rng::stream, stats};
+use tarafold_core::{Rng, rng::stream};
 use tarafold_expr::{BinOp, Expr, Node, UnOp};
 
 use crate::lm;
@@ -38,6 +38,9 @@ impl Member {
 struct Data {
     x: Vec<Vec<f64>>,
     y: Vec<f64>,
+    /// Square roots of row weights, when weighted.
+    sw: Option<Vec<f64>>,
+    /// Weighted variance of y.
     var_y: f64,
     n_vars: u16,
     unary: Vec<UnOp>,
@@ -102,16 +105,28 @@ impl Data {
             }
             cols.push(v);
         }
-        let Some(coefs) = tarafold_core::linalg::lstsq(&cols, &self.y) else {
+        let coefs = match &self.sw {
+            None => tarafold_core::linalg::lstsq(&cols, &self.y),
+            Some(sw) => {
+                let wc: Vec<Vec<f64>> = cols
+                    .iter()
+                    .map(|c| c.iter().zip(sw).map(|(a, s)| a * s).collect())
+                    .collect();
+                let wy: Vec<f64> = self.y.iter().zip(sw).map(|(a, s)| a * s).collect();
+                tarafold_core::linalg::lstsq(&wc, &wy)
+            }
+        };
+        let Some(coefs) = coefs else {
             return bad;
         };
-        let mse = (0..n)
-            .map(|i| {
-                let p: f64 = cols.iter().zip(&coefs).map(|(c, b)| c[i] * b).sum();
-                (p - self.y[i]).powi(2)
-            })
-            .sum::<f64>()
-            / n as f64;
+        let (mut sse, mut wsum) = (0.0, 0.0);
+        for i in 0..n {
+            let p: f64 = cols.iter().zip(&coefs).map(|(c, b)| c[i] * b).sum();
+            let w = self.sw.as_ref().map_or(1.0, |s| s[i] * s[i]);
+            sse += w * (p - self.y[i]).powi(2);
+            wsum += w;
+        }
+        let mse = sse / wsum.max(1e-300);
         if !mse.is_finite() {
             return bad;
         }
@@ -325,6 +340,7 @@ impl Island {
 pub(crate) fn search(
     train_x: &[Vec<f64>],
     train_y: &[f64],
+    train_w: Option<&[f64]>,
     seeds: &[Expr],
     cfg: &GpConfig,
     unary: Vec<UnOp>,
@@ -343,7 +359,8 @@ pub(crate) fn search(
         rows.sort_unstable();
     }
     let y: Vec<f64> = rows.iter().map(|&i| train_y[i]).collect();
-    let var_y = stats::variance(&y);
+    let w: Option<Vec<f64>> = train_w.map(|w| rows.iter().map(|&i| w[i].max(0.0)).collect());
+    let var_y = crate::weighted_variance(&y, w.as_deref());
     if var_y.is_nan() || var_y <= 0.0 {
         return (Vec::new(), 0);
     }
@@ -353,6 +370,7 @@ pub(crate) fn search(
             .map(|c| rows.iter().map(|&i| c[i]).collect())
             .collect(),
         y,
+        sw: w.map(|w| w.iter().map(|v| v.sqrt()).collect()),
         var_y,
         n_vars: p.min(u16::MAX as usize) as u16,
         unary,
@@ -461,7 +479,7 @@ pub(crate) fn search(
             s.nmse.is_finite().then(|| apply_scaling(&s))
         })
         .flat_map(|e| {
-            let refit = lm::refine(&e, train_x, train_y, 50);
+            let refit = lm::refine_w(&e, train_x, train_y, train_w, 50);
             // Keep both the scaled form and its full refit; the Pareto front decides.
             std::iter::once(e).chain(refit)
         })

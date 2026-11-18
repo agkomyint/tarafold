@@ -563,6 +563,11 @@ export interface RunConfig {
   designed?: string[];
   discover?: DiscoverConfig;
   /**
+   * Computation engine (R20). Only `classical` exists in v0.1; `quantum` and `hybrid` are
+   * reserved and rejected.
+   */
+  engine?: string;
+  /**
    * Do not use any other target as a feature. By default a target may use targets listed
    * before it in `targets` (so chained equations follow the given order and cannot cycle).
    */

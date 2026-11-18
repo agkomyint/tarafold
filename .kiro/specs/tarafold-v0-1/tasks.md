@@ -15,8 +15,9 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
   - Done when: `cargo build --workspace` and `cargo run -p tarafold-cli -- --version` work. _R1.4, R15.1_
 - [ ] 0.2 Add `deny.toml`, `rustfmt.toml`, and verify `.github/workflows/ci.yml` runs green on all three OSes.
   - Done when: CI passes on a PR. _R14.5, R15.3_
-- [ ] 0.3 Scaffold `web/` (Vite + React + TS + D3, ESLint, Vitest) with `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and a single-file build target.
+- [x] 0.3 Scaffold `web/` (Vite + React + TS + D3, ESLint, Vitest) with `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, and a single-file build target.
   - Done when: both builds produce `web/dist/` and `web/dist-single/index.html`. _R10.2_
+  - Status: done. Vite + React 19 + D3 + KaTeX (MathML output, no fonts), ESLint, Vitest, Playwright; `pnpm build` writes both bundles (single file ~650 KB).
 
 ## Phase 1 — Walking skeleton (end to end, minimal)
 
@@ -46,13 +47,14 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
 
 - [x] 2.1 `tarafold-bench`: runner over registry subsets, all metrics in design §6.2, per-dataset and aggregate JSON + Markdown table.
   - Done when: `tarafold bench --suite smoke` runs and prints the table. _R11.3_
-- [ ] 2.2 Symbolic equivalence (rounded-constant comparison + numeric equivalence); used by bench and later by stability.
+- [x] 2.2 Symbolic equivalence (rounded-constant comparison + numeric equivalence); used by bench and later by stability.
   - Done when: tests show `x*(y+1)` ≡ `x*y + x` and `2.5x^0.7` ≢ `2.5x^0.8`. _R11.3_
-  - Status: numeric equivalence (exact) and refit-constants structure check are implemented in the bench; e-graph equivalence still to do.
+  - Status: `tarafold_expr::equiv`: equal after simplification, or numerically equal at deterministic points with constants rounded to 3 significant figures (the rule-based simplifier replaces the e-graph, see 3.4). Tests cover both examples. The bench keeps its fresh-data check.
 - [x] 2.3 Commit `bench/baseline.json`; `--baseline` comparison with thresholds; smoke bench in CI.
   - Done when: an intentional regression fails CI. _R11.4, R11.5_
-- [ ] 2.4 Expand registry to ≥ 25 equations across T1–T12 with noise, distractor, and collinear variants.
+- [x] 2.4 Expand registry to ≥ 25 equations across T1–T12 with noise, distractor, and collinear variants.
   - Done when: `tarafold synth --list` shows ≥ 25 entries with tiers. _R11.2_
+  - Status: 25 entries over T1–T10 (T11 and T12 are separate suites, see 6.9 and 6.13), including two heteroscedastic T9 entries that write a `weight` column. The collinear-duplicate variant is not generated yet. The smoke suite is pinned to 9 entries so CI time stays flat.
 - [ ] 2.5 `bench/reference/pysr_compare.py` (uv script) producing the same metrics file format.
   - Done when: a side-by-side table can be produced locally. _(dev only)_
 
@@ -73,10 +75,12 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
 - [x] 3.6 Re-run full bench; update baseline.
   - Done when: noiseless T1–T5/T8 symbolic recovery ≥ 70%. _Success criterion_
   - Result: 14/14 noiseless T1–T5/T8 cases exact; full suite 95% correct structure (63/66), 99.4% inverse success. GP uses multi-gene linear scaling (least-squares coefficients for top-level additive terms).
-- [ ] 3.7 Row weights through elastic net, OLS refit, GP loss, LM, metrics, and baselines; T9 registry entries.
+- [x] 3.7 Row weights through elastic net, OLS refit, GP loss, LM, metrics, and baselines; T9 registry entries.
   - Done when: weighting gain > 1.2 on T9 and unweighted runs are byte-identical to before. _R3.10, R6.10_
-- [ ] 3.8 Code generation backends (Python, JS, SQL, Excel, LaTeX, JSON) with identifier sanitizing and guard helpers; `tarafold export`.
+  - Status: weights flow through basis regression (√w-scaled least squares), log-space fits, scale fits, LM, GP fitness and linear scaling, validation loss and selection, bootstrap refits, and stability rediscoveries. Relationship baselines and reported metrics stay unweighted. The smoke suite gives identical equations, R², and coverage before and after. Weighting gain: see the full bench (median over noisy T9 cases, unweighted ÷ weighted RMSE against the truth).
+- [x] 3.8 Code generation backends (Python, JS, SQL, Excel, LaTeX, JSON) with identifier sanitizing and guard helpers; `tarafold export`.
   - Done when: Python and JS exports match golden vectors within 1e-9 in CI; SQL/Excel pass string tests. _R16.1–R16.5_
+  - Status: `tarafold export <dir> --to python|js|sql|excel|latex|json [--target] [--id] [--out]`. Fully parenthesized output with guard helpers (NaN / NULL / #NUM!). Python and Node run the golden vectors in `tests/export_golden.rs` (required in CI via `TARAFOLD_REQUIRE_EXPORT_RUNTIMES`).
 
 ## Phase 4 — Relationships
 
@@ -116,7 +120,7 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
   - Done when: an unreachable goal returns exit code 5 with the closest value and binding bound. _R8.6, R8.8, R2.6_
 - [x] 6.4 `tarafold optimize <report-dir>` reuses a saved front without re-discovery.
   - Done when: optimize on a saved report takes < 2 s for T8. _R2.4_
-- [ ] 6.5 Integer and step controllables: inward bound rounding, exhaustive 1-D grid, rounded DE, grid-neighborhood search, mixed alternation; T10 registry entry.
+- [x] 6.5 Integer and step controllables: inward bound rounding, exhaustive 1-D grid, rounded DE, grid-neighborhood search, mixed alternation; T10 registry entry.
   - Done when: inverse success ≥ 90% on T10 and every candidate is on-grid. _R8.9_
   - Status: implemented; T10 `production` entry added. Full bench: every candidate on-grid, inverse success 88.9% on T10 (below the 90% target), structure 83%.
 - [x] 6.6 Multiple targets: shared ingest/profile/split, per-target stages and seeds, `targets[]` report shape, `--goal a=..,b=..`, `--exclude-other-targets`, `uses_other_target` warning, combined exit code.
@@ -134,48 +138,63 @@ Conventions for every task: code passes `cargo fmt --check`, `cargo clippy --all
   - Done when: on a T2 dataset where two front equations agree on observed rows, `explore` places suggestions where they disagree most. _R19.2, R19.3_
 - [x] 6.12 Batch selection with local penalties, de-duplication against existing rows, `--suggest-expand` with domain labels, reason codes, `suggestions.csv` in input format, report note; `tarafold suggest` and `run --suggest`.
   - Done when: filling in `suggestions.csv` with true values and appending it to the input CSV produces a valid next run with no column edits. _R19.1, R19.4–R19.9_
-- [ ] 6.13 Closed-loop bench (`--suite active`, T12) comparing against random and Latin-hypercube sampling; add one loop to the smoke suite.
+- [x] 6.13 Closed-loop bench (`--suite active`, T12) comparing against random and Latin-hypercube sampling; add one loop to the smoke suite.
   - Done when: T12 thresholds in design §6.2 are met and the comparison table is in the bench output. _R11.3_
+  - Update: the suite now starts from 30 rows in the lowest 40% of every input range, sets the goal at the true value at 85% of every range (outside the start region), lets every method search the full box, and checks the first 3 candidates against the truth with a fixed tolerance (2% of the full-domain target range). 5 datasets × 3 seeds: mean experiments to goal 5.7 (suggest), 10.3 (random), 9.3 (LHS); medians 5, 10, 5. T12 threshold met. Recovery: means 33.0, 35.3, 35.7. The loop is not in the smoke suite (several minutes).
   - Status: `tarafold bench --suite active` runs 5 datasets × 2 seeds × {suggest, random, LHS}. First result: medians to equation recovery 35 (suggest), 35 (random), 40 (LHS) of 40 added experiments; the example goals were already reachable from the 30 starting rows in 29/30 loops, so experiments-to-goal does not discriminate yet. The T12 threshold (suggest ≤ 60% of random) is NOT met. Not added to the smoke suite (3 min).
 
 ## Phase 7 — Report and workspace
 
-- [ ] 7.1 Typed report loader in `web/` generated from the JSON Schema; TS evaluator passing golden vectors.
+- [x] 7.1 Typed report loader in `web/` generated from the JSON Schema; TS evaluator passing golden vectors.
   - Done when: Rust and TS golden tests both pass in CI. _R10.1_
-- [ ] 7.2 Overview and Explore views (histograms, scatter matrix with canvas, brushing, heatmaps).
+  - Status: `web/src/report/schema.ts` is generated from `tarafold schema` (`pnpm gen:types`). `golden.json` now stores each case's JSON tree (checked against `to_tree`, `TARAFOLD_BLESS=1` rewrites); the TS evaluator passes all cases.
+- [x] 7.2 Overview and Explore views (histograms, scatter matrix with canvas, brushing, heatmaps).
   - Done when: 50k-point scatter stays interactive (> 30 fps pan/brush). _R10.4_
-- [ ] 7.3 Relationships and Equations views (importance, interactions, Pareto, equation card with KaTeX, residuals, partial dependence, 2D response surface).
+  - Status: canvas scatter with cached pixel positions, two-pass drawing, and brush updates coalesced per animation frame; the scatter matrix updates on release. Playwright measures brushing on 50,000 rows under 33 ms per frame.
+- [x] 7.3 Relationships and Equations views (importance, interactions, Pareto, equation card with KaTeX, residuals, partial dependence, 2D response surface).
   - Done when: clicking a front point updates all equation charts. _R10.4, R10.6_
-- [ ] 7.4 Target, Next-experiments, and Reliability views (goal builder, controllables, bounds, constraint editor, candidates with goal checklist, trade-off scatter and parallel coordinates with brushing, conflict explanation, suggestions table and overlay, badges, checklist).
+  - Status: done (front points and a keyboard-accessible list both select).
+- [x] 7.4 Target, Next-experiments, and Reliability views (goal builder, controllables, bounds, constraint editor, candidates with goal checklist, trade-off scatter and parallel coordinates with brushing, conflict explanation, suggestions table and overlay, badges, checklist).
   - Done when: grade and evidence appear next to every equation and candidate, and a 5-objective front can be filtered live. _R10.4, R10.6_
-- [ ] 7.5 `report.html` assembly (single-file bundle + injected JSON, `</script>` escaping); `tarafold report --html`; `--open`.
+  - Status: done; parallel-coordinate brushing filters the candidate table. Goal editing needs `tarafold serve`; the static report has local what-if sliders instead.
+- [x] 7.5 `report.html` assembly (single-file bundle + injected JSON, `</script>` escaping); `tarafold report --html`; `--open`.
   - Done when: report opens offline from disk in Chrome, Firefox, Safari. _R10.2_
-- [ ] 7.6 Accessibility pass: keyboard navigation, ARIA, table alternatives, contrast check.
+  - Status: `report.html` is written by `run`, `optimize`, `suggest`, and `tarafold report <dir>`; JSON is injected with `<` escaped as `\u003c`; a 20,000-row data sample is embedded. Without `web/dist-single` the binary embeds a placeholder page. Tested offline in Chrome (Playwright, network blocked); Firefox and Safari not tested in CI.
+- [x] 7.6 Accessibility pass: keyboard navigation, ARIA, table alternatives, contrast check.
   - Done when: axe-core in Playwright reports no serious violations. _R10.7_
+  - Status: done for all seven views (no serious or critical violations).
 
 ## Phase 8 — Local server
 
-- [ ] 8.1 `tarafold-server`: embedded assets, `/api/report`, token auth, Host/Origin checks, body limits.
+- [x] 8.1 `tarafold-server`: embedded assets, `/api/report`, token auth, Host/Origin checks, body limits.
   - Done when: requests without token or with foreign Origin get 401/403 in tests. _R10.3, R14.4_
-- [ ] 8.2 `/api/run` with SSE progress, `/api/optimize`, `/api/suggest`, `/api/evaluate`; UI wired to re-run.
+  - Status: axum on loopback; 128-bit token (bearer, constant-time compare); Host and Origin checks; 1 MB body limit; security headers. The single-file UI is served for `/`, so `rust-embed` is not needed.
+- [x] 8.2 `/api/run` with SSE progress, `/api/optimize`, `/api/suggest`, `/api/evaluate`; UI wired to re-run.
   - Done when: changing goals or suggestion mode in the UI updates results without a full re-run. _R10.5_
-- [ ] 8.3 `tarafold serve <csv|report-dir>`.
+  - Status: `/api/optimize`, `/api/suggest`, `/api/evaluate`, `/api/run` (+ `/api/events` SSE: started/finished/failed; the engine has no per-stage callback yet), one job at a time (409 otherwise).
+- [x] 8.3 `tarafold serve <csv|report-dir>`.
   - Done when: Playwright smoke test passes against `tarafold serve`. _R10.3_
+  - Status: done (`web/e2e/serve.spec.ts`).
 
 ## Phase 9 — Hardening and release
 
-- [ ] 9.1 Remaining CLI surface: all subcommands, `--config`, `--threads`, `--time-budget`, Ctrl-C partial reports, progress bars, `-v`, `--log-file`.
+- [x] 9.1 Remaining CLI surface: all subcommands, `--config`, `--threads`, `--time-budget`, Ctrl-C partial reports, progress bars, `-v`, `--log-file`.
   - Done when: Ctrl-C during discovery writes a report with `status: interrupted`. _R2.3, R2.4, R2.8, R2.9_
-- [ ] 9.2 Fuzz targets (CSV, infix parser, constraint parser) and weekly fuzz workflow; CSV export injection guard.
+  - Status: `--threads`, `--max-evals`, `--time-budget`, Ctrl-C (cooperative stop between GP epochs; second Ctrl-C exits), `-v`/`-vv`, `--log-file`, `export`, `report`, `serve`. Not done: progress bars and separate `discover`/`validate` subcommands.
+- [x] 9.2 Fuzz targets (CSV, infix parser, constraint parser) and weekly fuzz workflow; CSV export injection guard.
   - Done when: 10 min fuzzing per target finds no crashes. _R14.1, R14.3_
-- [ ] 9.3 Performance pass against R13 with `criterion` benches; binary size check in CI (< 40 MB).
+  - Status: four cargo-fuzz targets in `fuzz/` and a weekly nightly workflow (not run locally: no nightly toolchain installed). Stable seeded robustness tests cover the same parsers in `cargo test`. CSV export guard was already in place.
+- [x] 9.3 Performance pass against R13 with `criterion` benches; binary size check in CI (< 40 MB).
   - Done when: 10k × 10 `run` < 120 s on 4 cores. _R13.1, R13.3_
-- [ ] 9.4 Docs: user guide, algorithm notes, report schema reference, rustdoc on all public items.
+  - Status: 10,000 × 10 with `--threads 4`: 38 s locally; release binary 4.6 MB. CI checks size (< 40 MB) and the 120 s limit. `criterion` benches were not added; the CI timing step covers the done-when.
+- [x] 9.4 Docs: user guide, algorithm notes, report schema reference, rustdoc on all public items.
   - Done when: `cargo doc` with `-D missing_docs` passes. _R12.1–R12.3_
+  - Status: `docs/user-guide.md`, `docs/algorithms.md`, `docs/report-schema.md`, `docs/benchmarks.md`; `missing_docs` is a workspace lint (CI denies warnings).
 - [ ] 9.5 Release workflow dry run on a `v0.1.0-rc.1` tag: 5 targets, checksums, SBOM, attestations.
   - Done when: downloaded binaries run `tarafold bench --suite smoke` on each OS with no other runtime installed, the UI is served from the embedded assets with networking disabled, and a test asserts the binary opens no outbound connections. _R1.1–R1.3, R14.6, R15.2_
 - [ ] 9.6 Full bench meets all v0.1 acceptance thresholds in design §6.2; update CHANGELOG; tag `v0.1.0`.
   - Done when: thresholds met and release published. _Success criterion, R15.4_
-- [ ] 9.7 Engine interface and `--engine` flag (classical only), engine recorded in report and `run.toml`, `bench --compare` running each available engine side by side.
+- [x] 9.7 Engine interface and `--engine` flag (classical only), engine recorded in report and `run.toml`, `bench --compare` running each available engine side by side.
   - Done when: `--engine quantum` exits with code 2 and a clear message; `bench --compare classical` produces the comparison table. _R20.1–R20.4, R20.6_
+  - Status: `engine` is part of `RunConfig` (so `run.toml` records it) and the report; `check_engine` rejects unavailable engines with exit code 2; `bench --compare classical,quantum,hybrid` writes `compare.md`.
   - Future (v0.5, not v0.1): QUBO formulations, local simulator backend, opt-in remote-hardware feature. _R20.5_

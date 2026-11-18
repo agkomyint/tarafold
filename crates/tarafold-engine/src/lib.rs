@@ -37,6 +37,22 @@ pub struct Outcome {
     pub goal_missed: bool,
 }
 
+/// Engines available in this build (R20).
+pub const ENGINES: [&str; 1] = ["classical"];
+
+/// Reject engines this build does not have.
+pub fn check_engine(name: &str) -> Result<(), EngineError> {
+    if ENGINES.contains(&name) {
+        return Ok(());
+    }
+    Err(EngineError::Config(match name {
+        "quantum" | "hybrid" => format!(
+            "engine `{name}` is not available in this build: only `classical` is implemented; quantum and hybrid engines are planned (requirement R20)"
+        ),
+        _ => format!("unknown engine `{name}`; available: classical"),
+    }))
+}
+
 /// Tool version recorded in reports.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -279,6 +295,8 @@ fn fit_target(
     };
     let disc_tx = cols(&train_rows);
     let disc_ty = stats::gather(y, &train_rows);
+    let disc_tw: Option<Vec<f64>> = data.weights.as_ref().map(|w| stats::gather(w, &train_rows));
+    let val_w: Option<Vec<f64>> = data.weights.as_ref().map(|w| stats::gather(w, &split.val));
 
     let out = timed(stages, &format!("discover:{target}"), || {
         discover(&DiscoverInput {
@@ -286,6 +304,8 @@ fn fit_target(
             train_y: &disc_ty,
             val_x: &prepared.vx,
             val_y: &prepared.vy,
+            train_w: disc_tw.as_deref(),
+            val_w: val_w.as_deref(),
             config: &cfg.discover,
             seed: cfg.seed,
         })
@@ -328,7 +348,17 @@ fn fit_target(
         .map(|&j| data.columns[j].name.clone())
         .collect();
     let rel_corr = rel.report.feature_correlation.clone();
-    let refit = |e: &Expr, x: &[Vec<f64>], y: &[f64]| tarafold_discover::refit_constants(e, x, y);
+    // With row weights, the weights travel as one extra column after the features, so bootstrap
+    // resampling keeps each row's weight; the refit splits it off again.
+    let n_feat = prepared.tx.len();
+    let refit = move |e: &Expr, x: &[Vec<f64>], y: &[f64]| {
+        if x.len() == n_feat + 1 {
+            let (fx, w) = x.split_at(n_feat);
+            tarafold_discover::refit_constants_w(e, fx, y, w.first().map(Vec::as_slice))
+        } else {
+            tarafold_discover::refit_constants(e, x, y)
+        }
+    };
     let (val_pred, test_pred) = (
         score(&sel.expr, &prepared.vx, &prepared.vy).1,
         score(&sel.expr, &prepared.sx, &prepared.sy).1,
@@ -342,12 +372,16 @@ fn fit_target(
         stats::std(&r)
     };
     // Bootstrap on train ∪ validation rows (capped at 2,000 rows), shared indices across targets.
-    let fit_x: Vec<Vec<f64>> = prepared
+    let mut fit_x: Vec<Vec<f64>> = prepared
         .tx
         .iter()
         .zip(&prepared.vx)
         .map(|(a, b)| a.iter().chain(b).copied().take(2000).collect())
         .collect();
+    if let Some(w) = &data.weights {
+        let rows: Vec<u32> = split.train.iter().chain(&split.val).copied().collect();
+        fit_x.push(stats::gather(w, &rows).into_iter().take(2000).collect());
+    }
     let fit_y: Vec<f64> = prepared
         .ty
         .iter()
@@ -399,11 +433,16 @@ fn fit_target(
                         .map(|c| idx.iter().map(|&i| c[i]).collect())
                         .collect();
                     let by: Vec<f64> = idx.iter().map(|&i| disc_ty[i]).collect();
+                    let bw: Option<Vec<f64>> = disc_tw
+                        .as_ref()
+                        .map(|w| idx.iter().map(|&i| w[i]).collect());
                     let out = discover(&DiscoverInput {
                         train_x: &bx,
                         train_y: &by,
                         val_x: &prepared.vx,
                         val_y: &prepared.vy,
+                        train_w: bw.as_deref(),
+                        val_w: val_w.as_deref(),
                         config: &dcfg,
                         seed: cfg.seed.wrapping_add(1 + r as u64),
                     })
@@ -784,6 +823,7 @@ pub fn rerun_from_report(
 
 /// Run the pipeline on a loaded dataset.
 pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineError> {
+    check_engine(&cfg.engine)?;
     if cfg.targets.is_empty() {
         return Err(EngineError::Config("no target given; pass --target".into()));
     }
@@ -884,7 +924,7 @@ pub fn run(data: &Dataset, cfg: &RunConfig) -> Result<(Report, Outcome), EngineE
             } else {
                 RunStatus::Completed
             },
-            engine: "classical".into(),
+            engine: cfg.engine.clone(),
             config: cfg.clone(),
             stages,
         },

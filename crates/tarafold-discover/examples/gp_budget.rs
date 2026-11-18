@@ -39,6 +39,8 @@ fn main() {
                     train_y: &ty,
                     val_x: &vx,
                     val_y: &vy,
+                    train_w: None,
+                    val_w: None,
                     config: &cfg,
                     seed,
                 })

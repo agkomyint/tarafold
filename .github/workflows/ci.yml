@@ -93,6 +93,39 @@ jobs:
       - run: pnpm --dir web test
       - run: pnpm --dir web build
 
+  # Browser tests against the real binary with the UI embedded, plus size and speed checks.
+  e2e:
+    needs: [detect, rust, web]
+    if: needs.detect.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm install -g pnpm@11
+      - run: pnpm --dir web install --frozen-lockfile
+      - run: pnpm --dir web build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p tarafold-cli
+      - name: Binary size under 40 MB (R13.3)
+        run: |
+          size=$(stat -c %s target/release/tarafold)
+          echo "binary: $size bytes"
+          test "$size" -lt 41943040
+      - name: 10k rows x 10 columns run under 120 s (R13.1)
+        run: |
+          ./target/release/tarafold synth gravity --rows 10000 --distractors 6 --noise 0.01 --out perf
+          start=$(date +%s)
+          timeout 120 ./target/release/tarafold run perf/data.csv --target force --out perf/out > /dev/null || { code=$?; [ "$code" -eq 4 ] || exit "$code"; }
+          echo "run took $(( $(date +%s) - start )) s"
+      - run: pnpm --dir web exec playwright install --with-deps chromium
+      - run: pnpm --dir web e2e
+        env:
+          TARAFOLD_BIN: ${{ github.workspace }}/target/release/tarafold
+
   smoke-bench:
     needs: [detect, rust]
     if: needs.detect.outputs.rust == 'true'
@@ -113,6 +146,9 @@ jobs:
             echo "bench/baseline.json not committed yet; running without regression check"
             cargo run -p tarafold-cli --release --locked -- bench --suite smoke --out bench/results
           fi
+      - name: Multi-goal benchmark (T11, informational)
+        continue-on-error: true
+        run: cargo run -p tarafold-cli --release --locked -- bench --suite multi --out bench/results
       - uses: actions/upload-artifact@v7
         if: always()
         with:

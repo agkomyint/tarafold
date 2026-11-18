@@ -20,6 +20,9 @@ pub struct RunConfig {
     pub exclude_other_targets: bool,
     /// Run seed. All randomness derives from it.
     pub seed: u64,
+    /// Computation engine (R20). Only `classical` exists in v0.1; `quantum` and `hybrid` are
+    /// reserved and rejected.
+    pub engine: String,
     /// Declared data source.
     pub data_source: DataSource,
     /// Columns set deliberately by the experimenter or simulator (R9.3). Empty means the
@@ -43,6 +46,7 @@ impl Default for RunConfig {
             targets: Vec::new(),
             exclude_other_targets: false,
             seed: 42,
+            engine: "classical".into(),
             data_source: DataSource::Observational,
             designed: Vec::new(),
             split: SplitConfig::default(),

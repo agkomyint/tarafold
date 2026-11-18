@@ -2,6 +2,7 @@
 //! and scores each result against the hidden true equation.
 
 pub mod active;
+pub mod multi;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -49,6 +50,19 @@ pub struct Case {
     pub seed: u64,
 }
 
+/// Entries in the smoke suite (one or two per tier, fast).
+pub const SMOKE: [&str; 9] = [
+    "linear",
+    "polynomial",
+    "cobb-douglas",
+    "interaction",
+    "kinetic-energy",
+    "gravity",
+    "business-revenue",
+    "business-direct",
+    "production",
+];
+
 /// The cases in a suite.
 pub fn cases(suite: Suite) -> Vec<Case> {
     let mut out = Vec::new();
@@ -57,7 +71,7 @@ pub fn cases(suite: Suite) -> Vec<Case> {
         Suite::Full => (&[200, 2000], &[0.0, 0.01, 0.1]),
     };
     for e in registry() {
-        if suite == Suite::Smoke && matches!(e.name, "rational" | "exp-log") {
+        if suite == Suite::Smoke && !SMOKE.contains(&e.name) {
             continue;
         }
         let distractor_options: &[usize] = if e.name == "interaction" {
@@ -126,6 +140,9 @@ pub struct CaseResult {
     pub grade: String,
     /// Wall time in seconds.
     pub seconds: f64,
+    /// T9 with noise: unweighted ÷ weighted RMSE against the truth (`null` otherwise).
+    #[serde(default)]
+    pub weighting_gain: Option<f64>,
     /// Failure, if the pipeline errored.
     pub error: Option<String>,
 }
@@ -163,6 +180,9 @@ pub struct Aggregate {
     /// Share graded `high` among cases with the wrong structure (should be low).
     #[serde(default)]
     pub high_given_wrong: f64,
+    /// Median weighting gain on noisy T9 cases (`null` when there are none).
+    #[serde(default)]
+    pub median_weighting_gain: Option<f64>,
     /// Total seconds.
     pub seconds: f64,
 }
@@ -224,8 +244,56 @@ fn failed(case: &Case, entry: &Entry, msg: String, seconds: f64) -> CaseResult {
         coverage_90: f64::NAN,
         grade: String::new(),
         seconds,
+        weighting_gain: None,
         error: Some(msg),
     }
+}
+
+/// T9 entries are run with their `weight` column as row weights.
+fn ingest_options(entry: &Entry) -> IngestOptions {
+    IngestOptions {
+        weights: entry.noise_scale.map(|_| "weight".to_string()),
+        ..Default::default()
+    }
+}
+
+/// Weighting gain on a T9 case: RMSE against the truth on fresh noiseless points of an
+/// unweighted run (weight column removed) divided by that of the weighted run.
+fn weighting_gain(
+    entry: &Entry,
+    g: &Generated,
+    cfg: &RunConfig,
+    weighted: &Expr,
+    weighted_features: &[String],
+    case: &Case,
+) -> Option<f64> {
+    let wi = g.headers.iter().position(|h| h == "weight")?;
+    let mut unw = g.clone();
+    unw.headers.remove(wi);
+    unw.columns.remove(wi);
+    let data = read_csv(
+        unw.to_csv().ok()?.as_bytes(),
+        entry.name,
+        &IngestOptions::default(),
+    )
+    .ok()?;
+    let mut cfg = cfg.clone();
+    cfg.optimize = Default::default();
+    cfg.validate.stability = 0;
+    let (report, _) = tarafold_engine::run(&data, &cfg).ok()?;
+    let t = &report.targets[0];
+    let sel = &t.discover.front[t.discover.selected_id];
+    let plain = parse(&sel.infix_exact, &t.features).ok()?;
+    let truth = parse(&g.truth.equation, &g.truth.features).ok()?;
+    let fresh = generate(entry, 1000, 0.0, case.distractors, case.seed + 2000).ok()?;
+    let rmse = |e: &Expr, names: &[String]| -> Option<f64> {
+        let a = e.eval_columns(&columns(&fresh, names)?, 1000)?;
+        let b = truth.eval_columns(&columns(&fresh, &g.truth.features)?, 1000)?;
+        Some((a.iter().zip(&b).map(|(x, y)| (x - y).powi(2)).sum::<f64>() / 1000.0).sqrt())
+    };
+    let r_w = rmse(weighted, weighted_features)?;
+    let r_u = rmse(&plain, &t.features)?;
+    Some(r_u / r_w.max(1e-12))
 }
 
 /// Run one case.
@@ -240,6 +308,7 @@ pub fn run_case(case: &Case) -> CaseResult {
             target: "",
             controllables: vec![],
             example_goal: 0.0,
+            noise_scale: None,
         };
         return failed(case, &e, format!("unknown dataset {}", case.dataset), 0.0);
     };
@@ -252,7 +321,7 @@ pub fn run_case(case: &Case) -> CaseResult {
         Ok(c) => c,
         Err(e) => return fail(e.to_string()),
     };
-    let data = match read_csv(csv.as_bytes(), entry.name, &IngestOptions::default()) {
+    let data = match read_csv(csv.as_bytes(), entry.name, &ingest_options(&entry)) {
         Ok(d) => d,
         Err(e) => return fail(e.to_string()),
     };
@@ -398,6 +467,9 @@ pub fn run_case(case: &Case) -> CaseResult {
         coverage_90: t.validate.test_coverage_90,
         grade: format!("{:?}", t.validate.reliability.grade).to_lowercase(),
         seconds,
+        weighting_gain: (entry.noise_scale.is_some() && case.noise > 0.0)
+            .then(|| weighting_gain(&entry, &g, &cfg, &found, &t.features, case))
+            .flatten(),
         error: None,
     }
 }
@@ -467,6 +539,10 @@ pub fn aggregate(results: &[&CaseResult]) -> Aggregate {
         ),
         high_given_structure: share_high(results, true),
         high_given_wrong: share_high(results, false),
+        median_weighting_gain: {
+            let g: Vec<f64> = results.iter().filter_map(|r| r.weighting_gain).collect();
+            (!g.is_empty()).then(|| median(&g))
+        },
         seconds: results.iter().map(|r| r.seconds).sum(),
     }
 }
@@ -635,5 +711,11 @@ pub fn markdown(r: &BenchReport) -> String {
         100.0 * r.aggregate.high_given_wrong,
         r.aggregate.seconds
     );
+    if let Some(g) = r.aggregate.median_weighting_gain {
+        let _ = writeln!(
+            s,
+            "Median weighting gain on noisy T9 cases (unweighted ÷ weighted RMSE against the truth): {g:.2}."
+        );
+    }
     s
 }

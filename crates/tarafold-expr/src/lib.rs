@@ -5,6 +5,7 @@
 //! instead of silently changing the meaning of the equation (design §4).
 
 pub mod codegen;
+pub mod equiv;
 mod eval;
 mod parse;
 mod print;

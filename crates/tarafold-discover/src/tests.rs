@@ -33,6 +33,8 @@ fn run_seeded(name: &str, rows: usize, noise: f64, distractors: usize, seed: u64
         train_y: &ty,
         val_x: &vx,
         val_y: &vy,
+        train_w: None,
+        val_w: None,
         config: &cfg,
         seed,
     })
@@ -131,6 +133,8 @@ fn genetic_search_is_thread_count_independent() {
                 train_y: &ty,
                 val_x: &vx,
                 val_y: &vy,
+                train_w: None,
+                val_w: None,
                 config: &cfg,
                 seed: 9,
             })

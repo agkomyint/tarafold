@@ -387,9 +387,9 @@ struct RunArgs {
     time_budget: Option<String>,
     #[arg(long)]
     config: Option<PathBuf>,
-    /// Computation engine. Only `classical` is available in this build.
-    #[arg(long, value_enum, default_value = "classical")]
-    engine: Engine,
+    /// Computation engine (default `classical`, the only one in this build).
+    #[arg(long, value_enum)]
+    engine: Option<Engine>,
     /// Output directory.
     #[arg(long, default_value = "tarafold-out")]
     out: PathBuf,
@@ -434,6 +434,8 @@ enum SuiteArg {
     Full,
     /// Closed-loop experiment selection (suggest vs random vs Latin hypercube).
     Active,
+    /// Multi-goal problems with known Pareto fronts (T11).
+    Multi,
 }
 
 #[derive(Args)]
@@ -450,6 +452,10 @@ struct BenchArgs {
     /// Output directory for bench.json and bench.md.
     #[arg(long, default_value = "bench-out")]
     out: PathBuf,
+    /// Compare engines side by side, e.g. `classical,quantum,hybrid` (R20). Engines missing
+    /// from this build are listed as unavailable.
+    #[arg(long, value_delimiter = ',')]
+    compare: Vec<String>,
 }
 
 #[derive(Args)]
@@ -648,6 +654,15 @@ fn build_config(a: &RunArgs) -> Result<RunConfig, Failure> {
     if a.exclude_other_targets {
         cfg.exclude_other_targets = true;
     }
+    if let Some(e) = a.engine {
+        cfg.engine = match e {
+            Engine::Classical => "classical",
+            Engine::Quantum => "quantum",
+            Engine::Hybrid => "hybrid",
+        }
+        .into();
+    }
+    tarafold_engine::check_engine(&cfg.engine)?;
     apply_goals(&a.g, &mut cfg.optimize)?;
     if let Some(n) = a.suggest {
         cfg.suggest.n = n.min(100);
@@ -702,15 +717,6 @@ fn write(dir: &Path, name: &str, contents: &str) -> Result<(), Failure> {
 }
 
 fn cmd_run(a: &RunArgs) -> Result<u8, Failure> {
-    match a.engine {
-        Engine::Classical => {}
-        Engine::Quantum | Engine::Hybrid => {
-            return Err(usage(
-                "engine not available in this build: only `classical` is implemented; \
-                 quantum and hybrid engines are planned (see requirement R20)",
-            ));
-        }
-    }
     let cfg = build_config(a)?;
     let tty = std::io::stderr().is_terminal();
     let mut opts = IngestOptions {
@@ -780,6 +786,29 @@ fn cmd_bench(a: &BenchArgs) -> Result<u8, Failure> {
     let suite = match a.suite {
         SuiteArg::Smoke => tarafold_bench::Suite::Smoke,
         SuiteArg::Full => tarafold_bench::Suite::Full,
+        SuiteArg::Multi => {
+            let tty = std::io::stderr().is_terminal();
+            let r = tarafold_bench::multi::run_multi(1, |x| {
+                if tty {
+                    eprintln!(
+                        "{}: HV ratio {:.3}{}",
+                        x.problem,
+                        x.hypervolume_ratio,
+                        x.error
+                            .as_deref()
+                            .map(|e| format!(" ({e})"))
+                            .unwrap_or_default()
+                    );
+                }
+            });
+            fs::create_dir_all(&a.out).with_context(|| format!("creating {}", a.out.display()))?;
+            let json = serde_json::to_string_pretty(&r).map_err(|e| anyhow!(e.to_string()))?;
+            write(&a.out, "multi.json", &json)?;
+            let md = tarafold_bench::multi::markdown(&r);
+            write(&a.out, "multi.md", &md)?;
+            print!("{md}");
+            return Ok(0);
+        }
         SuiteArg::Active => {
             let tty = std::io::stderr().is_terminal();
             let r = tarafold_bench::active::run_active(&[1, 2, 3], |l| {
@@ -821,6 +850,31 @@ fn cmd_bench(a: &BenchArgs) -> Result<u8, Failure> {
     let md = tarafold_bench::markdown(&report);
     write(&a.out, "bench.md", &md)?;
     print!("{md}");
+    if !a.compare.is_empty() {
+        let mut t = String::from(
+            "\n## Engine comparison\n\n| engine | status | cases | structure | R²>0.999 | inverse | seconds |\n|---|---|---|---|---|---|---|\n",
+        );
+        for e in &a.compare {
+            let e = e.trim();
+            if tarafold_engine::check_engine(e).is_ok() {
+                let g = &report.aggregate;
+                t.push_str(&format!(
+                    "| {e} | ran | {} | {:.0}% | {:.0}% | {:.1}% | {:.0} |\n",
+                    g.cases,
+                    100.0 * g.structure_rate,
+                    100.0 * g.accuracy_rate,
+                    100.0 * g.inverse_success,
+                    g.seconds
+                ));
+            } else {
+                t.push_str(&format!(
+                    "| {e} | not available in this build | — | — | — | — | — |\n"
+                ));
+            }
+        }
+        write(&a.out, "compare.md", &t)?;
+        print!("{t}");
+    }
 
     let read_baselines = |p: &Path| -> Result<serde_json::Map<String, serde_json::Value>, Failure> {
         if !p.exists() {

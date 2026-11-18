@@ -14,11 +14,11 @@ observations and it:
 It ships as **one binary** with no Python, Julia, or Node runtime. The CLI runs the whole
 pipeline, and an embedded visual workspace lets you explore the results.
 
-> **Status:** alpha. Prebuilt binaries: see GitHub Releases. Working: discovery (sparse regression
-> + genetic programming), reliability (bootstrap, stability, grades), single- and multi-goal
-> optimization with constraints, next-experiment suggestions, saved-report reruns, and `bench`.
-> On the built-in known-equation suite (144 cases) Tarafold finds the correct structure in 92%
-> of cases. Not yet built: the visual workspace, local server, equation export.
+> **Status:** v0.1 release candidate. Prebuilt binaries: see GitHub Releases. Everything below
+> works: discovery (sparse regression + genetic programming), reliability (bootstrap,
+> stability, grades), single- and multi-goal optimization with constraints, next-experiment
+> suggestions, row weights, equation export, the visual workspace (`report.html` and
+> `tarafold serve`), and `bench`. Current benchmark numbers: [docs/benchmarks.md](docs/benchmarks.md).
 > The v0.1 spec is in [`.kiro/specs/tarafold-v0-1/`](.kiro/specs/tarafold-v0-1/).
 
 ### Try it now
@@ -27,11 +27,12 @@ pipeline, and an embedded visual workspace lets you explore the results.
 cargo build --release -p tarafold-cli
 ./target/release/tarafold synth --list
 ./target/release/tarafold synth business-direct --rows 2000 --noise 0.05 --out demo
-./target/release/tarafold run demo/data.csv --target revenue --goal 50000 --control spend,price
+./target/release/tarafold run demo/data.csv --target revenue --goal 50000 --control spend,price --open
 ./target/release/tarafold bench --suite full --baseline bench/baseline.json   # score vs. truth
 ```
 
-The commands below describe the full v0.1 target interface; not all flags exist yet.
+User guide: [docs/user-guide.md](docs/user-guide.md). How the algorithms work:
+[docs/algorithms.md](docs/algorithms.md). Report format: [docs/report-schema.md](docs/report-schema.md).
 
 ## Quick look
 
@@ -114,7 +115,7 @@ Every result carries:
 | Stage | Methods |
 |---|---|
 | Relate | Pearson, Spearman, mutual information (KSG), distance correlation, ridge and gradient-boosted baselines, permutation importance, Friedman's H-statistic |
-| Discover | Sparse basis regression (FFX/SINDy-style, including log-log for power laws), then genetic-programming symbolic regression with Levenberg–Marquardt constant fitting and e-graph simplification |
+| Discover | Sparse basis regression (FFX/SINDy-style, including log-log for power laws), then genetic-programming symbolic regression with Levenberg–Marquardt constant fitting and rule-based algebraic simplification |
 | Validate | Train/validation/test split, bootstrap intervals, structural stability, residual diagnostics, applicability domain |
 | Optimize | Exact 1-D root finding, differential evolution with local refinement, linear constraints, NSGA-II/III for multiple objectives, diversity selection, ensemble uncertainty and joint goal probability |
 | Suggest | Ensemble over competing equations and bootstrap refits; uncertainty, equation-disagreement, and goal-likelihood scores; diverse batches |
@@ -138,7 +139,18 @@ cargo build --release -p tarafold-cli
 ./target/release/tarafold --version
 ```
 
-Without the UI build, the binary still works and `serve` shows how to build the UI.
+Without the UI build, the binary still works; `report.html` and `serve` then show the raw
+report with a note on how to build the UI.
+
+Checks before a pull request:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+pnpm --dir web lint; pnpm --dir web typecheck; pnpm --dir web test; pnpm --dir web build
+pnpm --dir web e2e      # browser tests; PW_CHANNEL=chrome uses an installed Chrome
+```
 
 ## Contributing
 

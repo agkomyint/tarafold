@@ -44,6 +44,9 @@ pub struct Entry {
     pub controllables: Vec<&'static str>,
     /// A goal inside the achievable range.
     pub example_goal: f64,
+    /// Heteroscedastic noise (T9): an infix expression of the inputs giving each row's relative
+    /// noise scale. When set, a `weight` column `1 / scale²` (mean 1) is written before the target.
+    pub noise_scale: Option<&'static str>,
 }
 
 /// Ground truth written next to the CSV.
@@ -138,6 +141,7 @@ pub fn registry() -> Vec<Entry> {
             target: "y",
             controllables: vec!["x1", "x2"],
             example_goal: 20.0,
+            noise_scale: None,
         },
         Entry {
             name: "polynomial",
@@ -151,6 +155,7 @@ pub fn registry() -> Vec<Entry> {
             target: "y",
             controllables: vec!["x1", "x2"],
             example_goal: 5.0,
+            noise_scale: None,
         },
         Entry {
             name: "rational",
@@ -164,6 +169,7 @@ pub fn registry() -> Vec<Entry> {
             target: "y",
             controllables: vec!["x1", "x2"],
             example_goal: 3.0,
+            noise_scale: None,
         },
         Entry {
             name: "cobb-douglas",
@@ -177,6 +183,7 @@ pub fn registry() -> Vec<Entry> {
             target: "output",
             controllables: vec!["capital", "labor"],
             example_goal: 100.0,
+            noise_scale: None,
         },
         Entry {
             name: "exp-log",
@@ -190,6 +197,7 @@ pub fn registry() -> Vec<Entry> {
             target: "y",
             controllables: vec!["x1", "x2"],
             example_goal: 5.0,
+            noise_scale: None,
         },
         Entry {
             name: "interaction",
@@ -204,6 +212,7 @@ pub fn registry() -> Vec<Entry> {
             target: "y",
             controllables: vec!["x1", "x2", "x3"],
             example_goal: 10.0,
+            noise_scale: None,
         },
         Entry {
             name: "kinetic-energy",
@@ -217,6 +226,7 @@ pub fn registry() -> Vec<Entry> {
             target: "energy",
             controllables: vec!["mass", "velocity"],
             example_goal: 500.0,
+            noise_scale: None,
         },
         Entry {
             name: "gravity",
@@ -231,6 +241,7 @@ pub fn registry() -> Vec<Entry> {
             target: "force",
             controllables: vec!["m1", "r"],
             example_goal: 1000.0,
+            noise_scale: None,
         },
         Entry {
             name: "business-revenue",
@@ -247,6 +258,7 @@ pub fn registry() -> Vec<Entry> {
             target: "revenue",
             controllables: vec!["orders", "price"],
             example_goal: 50_000.0,
+            noise_scale: None,
         },
         Entry {
             name: "business-direct",
@@ -264,6 +276,7 @@ pub fn registry() -> Vec<Entry> {
             target: "revenue",
             controllables: vec!["spend", "price"],
             example_goal: 50_000.0,
+            noise_scale: None,
         },
         Entry {
             name: "production",
@@ -277,6 +290,204 @@ pub fn registry() -> Vec<Entry> {
             target: "output",
             controllables: vec!["machines", "hours"],
             example_goal: 600.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "linear5",
+            tier: "T1",
+            description: "Linear in five inputs, one unused: y = 2*x1 - x2 + 0.5*x3 + 3*x4 + 1",
+            columns: vec![
+                Uniform("x1", 0.0, 10.0),
+                Uniform("x2", 0.0, 10.0),
+                Uniform("x3", 0.0, 10.0),
+                Uniform("x4", 0.0, 10.0),
+                Uniform("x5", 0.0, 10.0),
+                Derived("y", "2*x1 - x2 + 0.5*x3 + 3*x4 + 1"),
+            ],
+            target: "y",
+            controllables: vec!["x1", "x4"],
+            example_goal: 40.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "cubic",
+            tier: "T2",
+            description: "Cubic: y = x^3 - x",
+            columns: vec![Uniform("x", -2.0, 2.0), Derived("y", "x^3 - x")],
+            target: "y",
+            controllables: vec!["x"],
+            example_goal: 3.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "quadratic3",
+            tier: "T2",
+            description: "Quadratic with a product: y = x1^2 + x2*x3",
+            columns: vec![
+                Uniform("x1", -3.0, 3.0),
+                Uniform("x2", 0.0, 4.0),
+                Uniform("x3", 0.0, 4.0),
+                Derived("y", "x1^2 + x2*x3"),
+            ],
+            target: "y",
+            controllables: vec!["x1", "x2"],
+            example_goal: 8.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "rational2",
+            tier: "T3",
+            description: "Rational: y = (x1 + x2) / (x1 * x2)",
+            columns: vec![
+                Uniform("x1", 1.0, 5.0),
+                Uniform("x2", 1.0, 5.0),
+                Derived("y", "(x1 + x2) / (x1 * x2)"),
+            ],
+            target: "y",
+            controllables: vec!["x1", "x2"],
+            example_goal: 1.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "power-ratio",
+            tier: "T4",
+            description: "Power law ratio: y = x1^1.5 / x2",
+            columns: vec![
+                Uniform("x1", 1.0, 10.0),
+                Uniform("x2", 1.0, 10.0),
+                Derived("y", "x1^1.5 / x2"),
+            ],
+            target: "y",
+            controllables: vec!["x1", "x2"],
+            example_goal: 5.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "exp-growth",
+            tier: "T5",
+            description: "Exponential growth: y = x1 * exp(x2 / 10)",
+            columns: vec![
+                Uniform("x1", 1.0, 10.0),
+                Uniform("x2", 0.0, 20.0),
+                Derived("y", "x1 * exp(x2 / 10)"),
+            ],
+            target: "y",
+            controllables: vec!["x1", "x2"],
+            example_goal: 20.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "decay",
+            tier: "T5",
+            description: "Decay to a floor: y = 5 * exp(-0.2 * t) + 1",
+            columns: vec![
+                Uniform("t", 0.0, 20.0),
+                Derived("y", "5 * exp(-0.2 * t) + 1"),
+            ],
+            target: "y",
+            controllables: vec!["t"],
+            example_goal: 2.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "saturating",
+            tier: "T6",
+            description: "Saturating share: y = x1 / (x1 + x2)",
+            columns: vec![
+                Uniform("x1", 0.5, 10.0),
+                Uniform("x2", 0.5, 10.0),
+                Derived("y", "x1 / (x1 + x2)"),
+            ],
+            target: "y",
+            controllables: vec!["x1", "x2"],
+            example_goal: 0.7,
+            noise_scale: None,
+        },
+        Entry {
+            name: "pendulum",
+            tier: "T7",
+            description: "Physics: period = 2*pi*sqrt(length / 9.81)",
+            columns: vec![
+                Uniform("length", 0.1, 5.0),
+                Derived("period", "6.283185307179586 * sqrt(length / 9.81)"),
+            ],
+            target: "period",
+            controllables: vec!["length"],
+            example_goal: 3.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "ideal-gas",
+            tier: "T7",
+            description: "Physics: temperature = pressure * volume / (moles * 8.314)",
+            columns: vec![
+                Uniform("pressure", 50.0, 200.0),
+                Uniform("volume", 1.0, 20.0),
+                Uniform("moles", 0.5, 5.0),
+                Derived("temperature", "pressure * volume / (moles * 8.314)"),
+            ],
+            target: "temperature",
+            controllables: vec!["pressure", "volume"],
+            example_goal: 300.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "coulomb",
+            tier: "T7",
+            description: "Physics: force = 8.988 * q1 * q2 / r^2",
+            columns: vec![
+                Uniform("q1", 0.5, 5.0),
+                Uniform("q2", 0.5, 5.0),
+                Uniform("r", 0.5, 3.0),
+                Derived("force", "8.988 * q1 * q2 / r^2"),
+            ],
+            target: "force",
+            controllables: vec!["q1", "r"],
+            example_goal: 40.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "drag",
+            tier: "T7",
+            description: "Physics: drag = 0.6 * cd * area * speed^2",
+            columns: vec![
+                Uniform("cd", 0.2, 1.2),
+                Uniform("area", 0.5, 3.0),
+                Uniform("speed", 1.0, 30.0),
+                Derived("drag", "0.6 * cd * area * speed^2"),
+            ],
+            target: "drag",
+            controllables: vec!["speed"],
+            example_goal: 300.0,
+            noise_scale: None,
+        },
+        Entry {
+            name: "weighted-linear",
+            tier: "T9",
+            description: "Heteroscedastic linear (noise grows with x1; weight = 1/sigma^2): y = 3*x1 - 2*x2 + 5",
+            columns: vec![
+                Uniform("x1", 0.0, 10.0),
+                Uniform("x2", 0.0, 10.0),
+                Derived("y", "3*x1 - 2*x2 + 5"),
+            ],
+            target: "y",
+            controllables: vec!["x1", "x2"],
+            example_goal: 20.0,
+            noise_scale: Some("0.1 + x1^2"),
+        },
+        Entry {
+            name: "weighted-power",
+            tier: "T9",
+            description: "Heteroscedastic power law (noise grows with capital; weight = 1/sigma^2): output = 2.5 * capital^0.7 * labor^0.3",
+            columns: vec![
+                Uniform("capital", 1.0, 100.0),
+                Uniform("labor", 1.0, 100.0),
+                Derived("output", "2.5 * capital^0.7 * labor^0.3"),
+            ],
+            target: "output",
+            controllables: vec!["capital", "labor"],
+            example_goal: 100.0,
+            noise_scale: Some("capital"),
         },
     ]
 }
@@ -434,10 +645,32 @@ pub fn generate_widened(
         names.push(format!("z{k}"));
         cols.push((0..rows).map(|_| rng.range(0.0, 10.0)).collect());
     }
+    // Heteroscedastic noise: per-row scale with mean square 1, and the matching weight column.
+    let scale: Option<Vec<f64>> = match entry.noise_scale {
+        None => None,
+        Some(src) => {
+            let e = parse(src, &names).map_err(|e| bad(e.to_string()))?;
+            let refs: Vec<&[f64]> = cols.iter().map(Vec::as_slice).collect();
+            let s = e
+                .eval_columns(&refs, rows)
+                .ok_or_else(|| bad("noise scale evaluation failed".into()))?;
+            if s.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+                return Err(bad("noise scale must be positive".into()));
+            }
+            let ms = (s.iter().map(|v| v * v).sum::<f64>() / rows as f64).sqrt();
+            let s: Vec<f64> = s.iter().map(|v| v / ms).collect();
+            let w: Vec<f64> = s.iter().map(|v| 1.0 / (v * v)).collect();
+            let mw = w.iter().sum::<f64>() / rows as f64;
+            names.push("weight".into());
+            cols.push(w.iter().map(|v| v / mw).collect());
+            Some(s)
+        }
+    };
     if noise > 0.0 {
         let sd = stats::std(&cols[t]) * noise;
-        for v in cols[t].iter_mut() {
-            *v += sd * rng.normal();
+        for (i, v) in cols[t].iter_mut().enumerate() {
+            let k = scale.as_ref().map_or(1.0, |s| s[i]);
+            *v += sd * k * rng.normal();
         }
     }
     // Put the target last.
