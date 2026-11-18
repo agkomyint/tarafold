@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-11-17
+
+Second preview: Phases 5 and 6 of the v0.1 spec. The visual workspace, local server, and equation
+export are not included yet.
+
 ### Added
 
 - Reliability: bootstrap confidence intervals for constants and ensemble prediction intervals,
@@ -22,6 +27,18 @@ All notable changes to this project are documented here. The format follows
   evaluator vectors, schema validation of `report.json`.
 - Benchmark: two seeds per case (144 cases incl. new T10 discrete-input tier) and
   `--suite active` (closed-loop experiment selection).
+
+### Known limitations
+
+- In the closed-loop benchmark, suggestions do not yet need fewer experiments than random
+  sampling (median 35 vs 35 to recover the equation).
+- Inverse success on discrete-input datasets (T10) is 88.9%, below the 90% target.
+
+### Benchmark (full suite, 144 cases)
+
+- Correct structure 92%, R² > 0.999 on fresh data 92%, inverse success 97.8%.
+- 90% interval coverage 0.894 on noisy cases; `high` grade for 92% of correct structures and
+  17% of wrong ones.
 ## [0.1.0-alpha.1] - 2026-11-17
 
 First preview. Phases 1–4 of the v0.1 spec; the visual workspace, multi-goal optimization,
