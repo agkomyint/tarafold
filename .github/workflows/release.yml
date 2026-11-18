@@ -44,12 +44,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both macOS targets build on one runner: fewer jobs waiting in the macOS queue.
+        # macOS builds are paused: hosted macOS runners did not pick up jobs (2026-11-18).
+        # To restore, add back:
+        #   - { name: macos, targets: "aarch64-apple-darwin x86_64-apple-darwin", os: macos-latest, archive: tar.gz }
         include:
           - { name: windows, targets: x86_64-pc-windows-msvc, os: windows-latest, archive: zip }
           - { name: linux-x86_64, targets: x86_64-unknown-linux-musl, os: ubuntu-latest, archive: tar.gz }
           - { name: linux-aarch64, targets: aarch64-unknown-linux-musl, os: ubuntu-latest, archive: tar.gz, cross: true }
-          - { name: macos, targets: "aarch64-apple-darwin x86_64-apple-darwin", os: macos-latest, archive: tar.gz }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -132,10 +133,10 @@ jobs:
           pattern: bin-*
           path: dist
           merge-multiple: true
-      - name: All five platforms present
+      - name: All three platforms present (Windows, Linux x86_64, Linux aarch64)
         run: |
           ls dist
-          test "$(ls dist | wc -l)" -eq 5
+          test "$(ls dist | wc -l)" -eq 3
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
