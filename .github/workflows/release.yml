@@ -3,12 +3,20 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Re-run a release for an existing tag with the workflow from the default branch
+  # (for example after a runner outage), without moving the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, e.g. v0.1.0"
+        required: true
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   # The single-file web UI, embedded into every binary (report.html and `tarafold serve`).
@@ -16,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -30,27 +40,31 @@ jobs:
 
   build:
     needs: web
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
+        # Both macOS targets build on one runner: fewer jobs waiting in the macOS queue.
         include:
-          - { target: x86_64-pc-windows-msvc, os: windows-latest, archive: zip }
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, archive: tar.gz }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, archive: tar.gz, cross: true }
-          - { target: x86_64-apple-darwin, os: macos-latest, archive: tar.gz }
-          - { target: aarch64-apple-darwin, os: macos-latest, archive: tar.gz }
+          - { name: windows, targets: x86_64-pc-windows-msvc, os: windows-latest, archive: zip }
+          - { name: linux-x86_64, targets: x86_64-unknown-linux-musl, os: ubuntu-latest, archive: tar.gz }
+          - { name: linux-aarch64, targets: aarch64-unknown-linux-musl, os: ubuntu-latest, archive: tar.gz, cross: true }
+          - { name: macos, targets: "aarch64-apple-darwin x86_64-apple-darwin", os: macos-latest, archive: tar.gz }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/download-artifact@v8
         with:
           name: web-dist-single
           path: web/dist-single
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - if: matrix.target == 'x86_64-unknown-linux-musl'
+      - name: Add targets
+        shell: bash
+        run: for t in ${{ matrix.targets }}; do rustup target add "$t"; done
+      - if: contains(matrix.targets, 'x86_64-unknown-linux-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - if: matrix.cross
         uses: taiki-e/install-action@v2
@@ -59,38 +73,47 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --locked -p tarafold-cli --target ${{ matrix.target }}
-          else
-            cargo build --release --locked -p tarafold-cli --target ${{ matrix.target }}
-          fi
-      - name: Check the binary runs and embeds the UI
+          for t in ${{ matrix.targets }}; do
+            if [ "${{ matrix.cross }}" = "true" ]; then
+              cross build --release --locked -p tarafold-cli --target "$t"
+            else
+              cargo build --release --locked -p tarafold-cli --target "$t"
+            fi
+          done
+      - name: Check the binaries run and embed the UI
         if: ${{ !matrix.cross }}
         shell: bash
         run: |
-          bin="target/${{ matrix.target }}/release/tarafold"
-          [ "${{ matrix.archive }}" = "zip" ] && bin="$bin.exe"
-          "$bin" --version
-          "$bin" synth linear --rows 300 --out check
-          "$bin" run check/data.csv --target y --stability 0 --out check/out > /dev/null
-          grep -q 'id="root"' check/out/report.html
+          for t in ${{ matrix.targets }}; do
+            bin="target/$t/release/tarafold"
+            [ "${{ matrix.archive }}" = "zip" ] && bin="$bin.exe"
+            "$bin" --version
+            "$bin" synth linear --rows 300 --out "check-$t"
+            "$bin" run "check-$t/data.csv" --target y --stability 0 --out "check-$t/out" > /dev/null
+            grep -q 'id="root"' "check-$t/out/report.html"
+          done
       - name: Package
         shell: bash
         run: |
-          name="tarafold-${GITHUB_REF_NAME}-${{ matrix.target }}"
-          mkdir -p "dist/$name"
-          bin="tarafold"; [ "${{ matrix.archive }}" = "zip" ] && bin="tarafold.exe"
-          cp "target/${{ matrix.target }}/release/$bin" README.md LICENSE CHANGELOG.md "dist/$name/"
-          cd dist
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            7z a "$name.zip" "$name" > /dev/null
-          else
-            tar czf "$name.tar.gz" "$name"
-          fi
-          rm -rf "$name"
+          mkdir -p dist
+          for t in ${{ matrix.targets }}; do
+            name="tarafold-${TAG}-$t"
+            mkdir -p "dist/$name"
+            bin="tarafold"; [ "${{ matrix.archive }}" = "zip" ] && bin="tarafold.exe"
+            cp "target/$t/release/$bin" README.md LICENSE CHANGELOG.md "dist/$name/"
+            (
+              cd dist
+              if [ "${{ matrix.archive }}" = "zip" ]; then
+                7z a "$name.zip" "$name" > /dev/null
+              else
+                tar czf "$name.tar.gz" "$name"
+              fi
+              rm -rf "$name"
+            )
+          done
       - uses: actions/upload-artifact@v7
         with:
-          name: bin-${{ matrix.target }}
+          name: bin-${{ matrix.name }}
           path: dist/*
 
   publish:
@@ -102,11 +125,17 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/download-artifact@v8
         with:
           pattern: bin-*
           path: dist
           merge-multiple: true
+      - name: All five platforms present
+        run: |
+          ls dist
+          test "$(ls dist | wc -l)" -eq 5
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
@@ -117,7 +146,7 @@ jobs:
         run: |
           cargo cyclonedx --format json --manifest-path crates/tarafold-cli/Cargo.toml
           f=$(find crates/tarafold-cli -maxdepth 1 -name '*.cdx.json' | head -n1)
-          if [ -n "$f" ]; then cp "$f" "dist/tarafold-${GITHUB_REF_NAME}.cdx.json"; else echo "::warning::no SBOM file produced"; fi
+          if [ -n "$f" ]; then cp "$f" "dist/tarafold-${TAG}.cdx.json"; else echo "::warning::no SBOM file produced"; fi
       - name: Checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS
@@ -129,5 +158,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           prerelease=""
-          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes $prerelease
+          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$TAG" dist/* --verify-tag --title "$TAG" --generate-notes $prerelease
