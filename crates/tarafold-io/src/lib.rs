@@ -72,6 +72,8 @@ pub struct IngestOptions {
     pub max_rows: usize,
     /// Maximum columns.
     pub max_cols: usize,
+    /// Maximum cells (rows × columns). Each cell takes 8 bytes in memory, so this bounds memory.
+    pub max_cells: usize,
     /// Minimum usable rows.
     pub min_rows: usize,
     /// Columns that must be present and numeric (targets, controllables).
@@ -85,8 +87,9 @@ impl Default for IngestOptions {
         Self {
             delimiter: None,
             decimal: None,
-            max_bytes: 2 * 1024 * 1024 * 1024,
-            max_rows: 10_000_000,
+            max_bytes: usize::MAX,
+            max_rows: 100_000_000,
+            max_cells: 2_000_000_000,
             max_cols: 500,
             min_rows: 30,
             required: Vec::new(),
@@ -171,43 +174,95 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Reader that counts bytes against a limit and feeds a SHA-256 as data streams through, so
+/// the file never has to be held in memory.
+struct Hashing<R> {
+    inner: R,
+    hasher: Sha256,
+    read: usize,
+    limit: usize,
+}
+
+impl<R: Read> Read for Hashing<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read = self.read.saturating_add(n);
+        if self.read > self.limit {
+            return Err(std::io::Error::other(LIMIT_MARKER));
+        }
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+}
+
+const LIMIT_MARKER: &str = "tarafold: byte limit exceeded";
+
 /// Read a CSV into a numeric [`Dataset`].
 ///
 /// Columns are numeric when ≥ 95% of non-missing cells parse as finite numbers. Rows with a
 /// missing value in any used column are dropped and counted. Constant, duplicate, mostly
 /// missing, and non-numeric columns are excluded with a reason.
+///
+/// The input is streamed: memory use is about 8 bytes per cell, independent of the text size.
 pub fn read_csv(
     mut input: impl Read,
     label: &str,
     opts: &IngestOptions,
 ) -> Result<Dataset, IoError> {
-    let mut bytes = Vec::new();
-    let limit = u64::try_from(opts.max_bytes)
-        .unwrap_or(u64::MAX)
-        .saturating_add(1);
-    input.by_ref().take(limit).read_to_end(&mut bytes)?;
-    if bytes.len() > opts.max_bytes {
+    // The first 64 KiB are read up front for delimiter and decimal sniffing.
+    let mut head_bytes = Vec::with_capacity(64 * 1024);
+    input
+        .by_ref()
+        .take(64 * 1024)
+        .read_to_end(&mut head_bytes)?;
+    if head_bytes.len() > opts.max_bytes {
         return Err(IoError::Limit {
             what: "file size (bytes)",
             limit: opts.max_bytes,
         });
     }
-    let sha256 = hex(&Sha256::digest(&bytes));
-    let body = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes); // UTF-8 BOM
-    let head = String::from_utf8_lossy(&body[..body.len().min(64 * 1024)]);
+    let mut hasher = Sha256::new();
+    hasher.update(&head_bytes);
+    let body_head = head_bytes
+        .strip_prefix(b"\xEF\xBB\xBF")
+        .unwrap_or(&head_bytes); // UTF-8 BOM
+    let head = String::from_utf8_lossy(body_head);
     let delimiter = opts.delimiter.unwrap_or_else(|| sniff_delimiter(&head));
     let decimal = opts
         .decimal
         .unwrap_or_else(|| sniff_decimal(&head, delimiter));
+    let mut stream = Hashing {
+        inner: input,
+        hasher,
+        read: head_bytes.len(),
+        limit: opts.max_bytes,
+    };
+    let limit_err = |e: &csv::Error| {
+        if let csv::ErrorKind::Io(io) = e.kind()
+            && io.to_string().contains(LIMIT_MARKER)
+        {
+            return true;
+        }
+        false
+    };
 
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(delimiter)
         .has_headers(true)
         .flexible(false)
-        .from_reader(body);
-    let csv_err = |e: csv::Error| IoError::Csv {
-        line: e.position().map_or(0, csv::Position::line),
-        message: e.to_string(),
+        .buffer_capacity(1 << 20)
+        .from_reader(body_head.chain(&mut stream));
+    let csv_err = |e: csv::Error| {
+        if limit_err(&e) {
+            return IoError::Limit {
+                what: "file size (bytes)",
+                limit: opts.max_bytes,
+            };
+        }
+        IoError::Csv {
+            line: e.position().map_or(0, csv::Position::line),
+            message: e.to_string(),
+        }
     };
     let headers: Vec<String> = rdr
         .headers()
@@ -238,6 +293,12 @@ pub fn read_csv(
                 limit: opts.max_rows,
             });
         }
+        if n_rows.saturating_mul(p) > opts.max_cells {
+            return Err(IoError::Limit {
+                what: "cell count (rows × columns; 8 bytes each in memory)",
+                limit: opts.max_cells,
+            });
+        }
         for (j, cell) in rec.iter().enumerate() {
             if is_missing_token(cell) {
                 values[j].push(f64::NAN);
@@ -256,6 +317,8 @@ pub fn read_csv(
     if n_rows == 0 {
         return Err(IoError::Empty);
     }
+    drop(rdr);
+    let sha256 = hex(&stream.hasher.finalize());
 
     // Decide which columns are usable.
     let mut excluded: Vec<ExcludedColumn> = Vec::new();
@@ -293,16 +356,32 @@ pub fn read_csv(
         }
     }
 
-    // Drop rows with missing values in kept columns.
-    let complete: Vec<usize> = (0..n_rows)
-        .filter(|&i| keep.iter().all(|&j| values[j][i].is_finite()))
+    // Free columns that will not be used before compacting the rest.
+    for (j, v) in values.iter_mut().enumerate() {
+        if !keep.contains(&j) {
+            *v = Vec::new();
+        }
+    }
+    // Drop rows with missing values in kept columns (compacted in place, no second copy).
+    let complete_mask: Vec<bool> = (0..n_rows)
+        .map(|i| keep.iter().all(|&j| values[j][i].is_finite()))
         .collect();
-    if complete.len() < opts.min_rows {
-        return Err(IoError::TooFewRows(complete.len()));
+    let n_complete = complete_mask.iter().filter(|&&c| c).count();
+    if n_complete < opts.min_rows {
+        return Err(IoError::TooFewRows(n_complete));
     }
     let mut columns: Vec<Column> = Vec::new();
     for &j in &keep {
-        let v: Vec<f64> = complete.iter().map(|&i| values[j][i]).collect();
+        let mut v = std::mem::take(&mut values[j]);
+        let mut w = 0;
+        for i in 0..n_rows {
+            if complete_mask[i] {
+                v[w] = v[i];
+                w += 1;
+            }
+        }
+        v.truncate(w);
+        v.shrink_to_fit();
         let name = headers[j].clone();
         let is_required = opts.required.contains(&name) || opts.weights.as_ref() == Some(&name);
         let first = v[0];
@@ -354,7 +433,7 @@ pub fn read_csv(
     };
 
     Ok(Dataset {
-        n_rows: complete.len(),
+        n_rows: n_complete,
         columns,
         weights,
         source: SourceInfo {
@@ -366,7 +445,7 @@ pub fn read_csv(
             },
             decimal: decimal.to_string(),
             rows_read: n_rows,
-            rows_dropped_missing: n_rows - complete.len(),
+            rows_dropped_missing: n_rows - n_complete,
             excluded,
         },
     })
@@ -453,6 +532,28 @@ mod tests {
         assert!(reasons.contains(&("sparse", "too_many_missing")));
         assert_eq!(d.n_rows, 40);
         assert_eq!(d.source.sha256.len(), 64);
+    }
+
+    #[test]
+    fn streaming_hash_and_byte_limit_on_large_input() {
+        // Larger than the 64 KiB head, with a BOM, so the streamed part is exercised.
+        let csv = format!(
+            "\u{feff}a,b,c\n{}",
+            rows(20_000, |i| format!("{i},{},{}", i * 3, (i % 7) as f64 / 2.0))
+        );
+        assert!(csv.len() > 200_000);
+        let d = read_csv(csv.as_bytes(), "big.csv", &IngestOptions::default()).unwrap();
+        assert_eq!(d.n_rows, 20_000);
+        assert_eq!(d.source.sha256, hex(&Sha256::digest(csv.as_bytes())));
+        assert_eq!(d.column("b").unwrap().values[19_999], 59_997.0);
+        let small = IngestOptions {
+            max_bytes: 100_000,
+            ..Default::default()
+        };
+        assert!(matches!(
+            read_csv(csv.as_bytes(), "big.csv", &small),
+            Err(IoError::Limit { .. })
+        ));
     }
 
     #[test]

@@ -468,6 +468,10 @@ pub(crate) fn search(
             }
         }
         epoch += 1;
+        tarafold_core::progress::search(total(&islands) as u64, cfg.max_evals as u64, || {
+            let best = hof.iter().flatten().map(|m| m.loss).fold(f64::INFINITY, f64::min);
+            format!("best normalized error {best:.3e}")
+        });
     }
 
     let evals = total(&islands);

@@ -38,6 +38,63 @@ pub struct RunConfig {
     pub optimize: OptimizeConfig,
     /// Next-experiment suggestions; inactive when `n` is 0.
     pub suggest: SuggestConfig,
+    /// Effort level the search settings were scaled with (recorded; see [`Effort`]).
+    pub effort: Effort,
+}
+
+/// How much compute a run may use. Scales the equation-search budget, restarts, rows used for
+/// fitting, stability reruns, and features passed to discovery. Results stay reproducible for
+/// a given seed and effort level.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Effort {
+    /// About 4× faster than default; for a first look.
+    Quick,
+    /// The v0.1 settings.
+    #[default]
+    Default,
+    /// About 5× the search, more rows and features.
+    Thorough,
+    /// About 20× the search; for overnight runs.
+    Max,
+}
+
+impl Effort {
+    /// Parse `quick|default|thorough|max`.
+    pub fn from_name(s: &str) -> Option<Self> {
+        Some(match s {
+            "quick" => Self::Quick,
+            "default" => Self::Default,
+            "thorough" => Self::Thorough,
+            "max" => Self::Max,
+            _ => return None,
+        })
+    }
+}
+
+impl RunConfig {
+    /// Scale the search settings from their defaults for `effort`, and record it. Call before
+    /// applying explicit overrides such as `--max-evals`.
+    pub fn apply_effort(&mut self, effort: Effort) {
+        let d = &mut self.discover;
+        let (evals, restarts, gp_rows, max_rows, features, relate, stability, bootstrap) =
+            match effort {
+                Effort::Quick => (0.25, 1, 800, 5_000, 12, 30_000, 3, 100),
+                Effort::Default => (1.0, 1, 800, 5_000, 12, 60_000, 10, 200),
+                Effort::Thorough => (5.0, 2, 2_000, 20_000, 16, 200_000, 10, 200),
+                Effort::Max => (20.0, 4, 4_000, 50_000, 20, 500_000, 20, 400),
+            };
+        let base = GpConfig::default().max_evals as f64;
+        d.gp.max_evals = (base * evals) as usize;
+        d.gp.restarts = restarts;
+        d.gp.rows = gp_rows;
+        d.max_rows = max_rows;
+        d.max_features = features;
+        d.relate_rows = relate;
+        self.validate.stability = stability;
+        self.validate.bootstrap = bootstrap;
+        self.effort = effort;
+    }
 }
 
 impl Default for RunConfig {
@@ -54,6 +111,7 @@ impl Default for RunConfig {
             validate: ValidateConfig::default(),
             optimize: OptimizeConfig::default(),
             suggest: SuggestConfig::default(),
+            effort: Effort::Default,
         }
     }
 }
@@ -88,6 +146,9 @@ pub struct DiscoverConfig {
     pub max_features: usize,
     /// Maximum training rows used by discovery (subsampled beyond this).
     pub max_rows: usize,
+    /// Maximum training rows for relationship measures and baseline models (validation and
+    /// test use a third of this and the full value). Seeded subsample beyond it.
+    pub relate_rows: usize,
     /// Maximum basis terms in sparse regression.
     pub max_basis: usize,
     /// Maximum non-zero terms per sparse-regression candidate.
@@ -107,6 +168,7 @@ impl Default for DiscoverConfig {
         Self {
             max_features: 12,
             max_rows: 5_000,
+            relate_rows: 60_000,
             max_basis: 400,
             max_terms: 12,
             max_front: 20,
@@ -160,6 +222,9 @@ pub struct GpConfig {
     /// Unary operators the search may use (`+ - * /` are always available). Supported:
     /// `exp log sqrt square abs sin cos tanh inv`.
     pub operators: Vec<String>,
+    /// Independent searches with different seeds, each with `max_evals / restarts`; their
+    /// results are merged. Restarts escape a search that settled on a poor form early.
+    pub restarts: usize,
 }
 
 impl Default for GpConfig {
@@ -175,6 +240,7 @@ impl Default for GpConfig {
             operators: ["exp", "log", "sqrt", "square", "inv"]
                 .map(String::from)
                 .to_vec(),
+            restarts: 1,
         }
     }
 }

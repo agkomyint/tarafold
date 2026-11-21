@@ -93,6 +93,7 @@ pub(crate) struct Fitted {
 }
 
 fn timed<T>(stages: &mut Vec<StageTiming>, name: &str, f: impl FnOnce() -> T) -> T {
+    tarafold_core::progress::stage(name);
     let t = Instant::now();
     let out = f();
     stages.push(StageTiming {
@@ -123,11 +124,26 @@ fn relate_features(
             .map(|&j| stats::gather(&data.columns[j].values, rows))
             .collect()
     };
-    let (tx, vx, sx) = (cols(&split.train), cols(&split.val), cols(&split.test));
+    // Relationship measures and baselines converge long before a million rows; cap the rows
+    // they use (seeded, so results are reproducible). Smaller data is used as is.
+    let cap = |rows: &[u32], max: usize, stream_id: u64| -> Vec<u32> {
+        if rows.len() <= max {
+            return rows.to_vec();
+        }
+        let mut r = rows.to_vec();
+        Rng::derive(cfg.seed, &[stream::SUBSAMPLE, stream_id]).shuffle(&mut r);
+        r.truncate(max);
+        r.sort_unstable();
+        r
+    };
+    let train_rows = cap(&split.train, cfg.discover.relate_rows, 1);
+    let val_rows = cap(&split.val, (cfg.discover.relate_rows / 3).max(1), 2);
+    let test_rows = cap(&split.test, cfg.discover.relate_rows, 3);
+    let (tx, vx, sx) = (cols(&train_rows), cols(&val_rows), cols(&test_rows));
     let (ty, vy, sy) = (
-        stats::gather(y, &split.train),
-        stats::gather(y, &split.val),
-        stats::gather(y, &split.test),
+        stats::gather(y, &train_rows),
+        stats::gather(y, &val_rows),
+        stats::gather(y, &test_rows),
     );
     let mut rel = timed(stages, &format!("relate:{target}"), || {
         tarafold_relate::analyze(&tarafold_relate::RelateInput {

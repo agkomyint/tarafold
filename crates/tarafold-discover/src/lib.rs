@@ -793,15 +793,34 @@ pub fn discover(input: &DiscoverInput<'_>) -> Result<DiscoverOutput, DiscoverErr
             .map(|&i| pool.cands[i].expr.clone())
             .collect();
         let unary = parse_operators(&cfg.gp.operators).map_err(DiscoverError::BadInput)?;
-        let (found, evals) = gp::search(
-            input.train_x,
-            y,
-            input.train_w,
-            &seeds,
-            &cfg.gp,
-            unary,
-            input.seed,
-        );
+        // Independent restarts with derived seeds share the budget; restart 0 uses the run
+        // seed itself, so `restarts = 1` is identical to a single search.
+        let restarts = cfg.gp.restarts.max(1);
+        let mut per = cfg.gp.clone();
+        per.max_evals = (cfg.gp.max_evals / restarts).max(1);
+        let mut found = Vec::new();
+        let mut evals = 0;
+        for r in 0..restarts {
+            if r > 0 && tarafold_core::stop::requested() {
+                break;
+            }
+            let seed = if r == 0 {
+                input.seed
+            } else {
+                input.seed ^ 0x9E37_79B9_7F4A_7C15_u64.wrapping_mul(r as u64)
+            };
+            let (f, e) = gp::search(
+                input.train_x,
+                y,
+                input.train_w,
+                &seeds,
+                &per,
+                unary.clone(),
+                seed,
+            );
+            found.extend(f);
+            evals += e;
+        }
         pool.evaluated += evals;
         let mut k = 0;
         for e in found {

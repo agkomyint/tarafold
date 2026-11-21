@@ -6,6 +6,7 @@ pub mod data;
 pub mod error;
 pub mod evidence;
 pub mod linalg;
+pub mod progress;
 pub mod rng;
 pub mod split;
 pub mod stats;
